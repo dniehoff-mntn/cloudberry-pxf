@@ -37,6 +37,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -51,6 +52,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
+import static java.lang.Thread.sleep;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.awaitility.Awaitility.with;
 import static org.testng.Assert.assertEquals;
 
 /**
@@ -85,6 +90,7 @@ public class Hdfs extends BaseSystemObject implements IFSFunctionality {
     private ShellSystemObject namenodeSso;
     private String namenodePrincipal;
     private String namenodeKeytab;
+    private String relativeWorkingDirectory;
 
     public Hdfs() {
 
@@ -233,13 +239,47 @@ public class Hdfs extends BaseSystemObject implements IFSFunctionality {
         return new Path(pathString);
     }
 
+    public void waitForFile(String path, int maxSecondsToWait) {
+        with().pollInterval(20, MILLISECONDS)
+                .and().with().pollDelay(20, MILLISECONDS)
+                .await().atMost(maxSecondsToWait, SECONDS)
+                .until(() -> doesFileExist(getDatapath(path).toString()));
+    }
+
     @Override
     public ArrayList<String> list(String path) throws Exception {
         ReportUtils.startLevel(report, getClass(), "List From " + path);
-        RemoteIterator<LocatedFileStatus> list = fs.listFiles(getDatapath(path), true);
+        RemoteIterator<LocatedFileStatus> list = null;
+        // build resilience to long delays for cloud and NFS mounts in CI
+        Exception savedException = null;
+        int attempt = 0;
+        while (list == null && attempt++ < 120) {
+            try {
+                list = fs.listFiles(getDatapath(path), true);
+            } catch (FileNotFoundException e) {
+                savedException = e;
+                ReportUtils.report(report, getClass(),
+                        String.format("Directory %s does not exist, attempt %d, will retry in 1 sec", path, attempt));
+                sleep(1000);
+            }
+        }
+        if (list == null) {
+            ReportUtils.report(report, getClass(),
+                    String.format("Directory %s does not exist, max attempts exceeded, throwing exception", path));
+            throw savedException;
+
+        }
         ArrayList<String> filesList = new ArrayList<>();
         while (list.hasNext()) {
-            filesList.add(list.next().getPath().toString());
+            String pathToFile = list.next().getPath().toString();
+            // make sure the file is available, saw flakes on Cloud that files were not available even if they were listed
+            int fileAttempt = 0;
+            while (!doesFileExist(pathToFile) && fileAttempt++ < 120) {
+                ReportUtils.report(report, getClass(),
+                        String.format("File %s does not exist, attempt %d, will retry in 1 sec", pathToFile, fileAttempt));
+                sleep(1000);
+            }
+            filesList.add(pathToFile);
         }
         ReportUtils.report(report, getClass(), filesList.toString());
         ReportUtils.stopLevel(report);
@@ -293,10 +333,27 @@ public class Hdfs extends BaseSystemObject implements IFSFunctionality {
     @Override
     public void removeDirectory(String path) throws Exception {
         ReportUtils.startLevel(report, getClass(), "Remove Directory " + path);
-        Path dataPath = getDatapath(path);
-        if (fs.exists(dataPath)) {
-            fs.delete(dataPath, true);
+        ProtocolEnum protocol = ProtocolUtils.getProtocol();
+        if (protocol == ProtocolEnum.ABFSS) {
+            // The ABFSS protocol cannot delete a non-empty directory, so recursively go through and delete files inside first
+            try {
+                RemoteIterator<LocatedFileStatus> files = fs.listFiles(getDatapath(path), true);
+                while (files.hasNext()) {
+                    Path filePath = files.next().getPath();
+                    if (fs.exists(filePath)) {
+                        fs.delete(filePath, true);
+                    }
+                }
+            } catch (FileNotFoundException e) {
+                ReportUtils.startLevel(report, getClass(), "File does not exist. Skipping removal of file " + path);
+            }
         }
+
+        Path datapath = getDatapath(path);
+        if (fs.exists(datapath)) {
+            fs.delete(datapath, true);
+        }
+
         ReportUtils.stopLevel(report);
     }
 
@@ -620,15 +677,26 @@ public class Hdfs extends BaseSystemObject implements IFSFunctionality {
     }
 
     public void setWorkingDirectory(String workingDirectory) {
+        this.relativeWorkingDirectory = workingDirectory;
+
         this.workingDirectory = workingDirectory;
 
         if (workingDirectory != null) {
             String basePath = getBasePath();
+            String uuid = UUID.randomUUID().toString();
+
+            this.relativeWorkingDirectory = workingDirectory
+                    .replace("${base.path}/", "")
+                    .replace("__UUID__", uuid);
 
             this.workingDirectory = workingDirectory
                     .replace("${base.path}", basePath)
-                    .replace("__UUID__", UUID.randomUUID().toString());
+                    .replace("__UUID__", uuid);
         }
+    }
+
+    public String getRelativeWorkingDirectory() {
+        return relativeWorkingDirectory;
     }
 
     public String getPort() {

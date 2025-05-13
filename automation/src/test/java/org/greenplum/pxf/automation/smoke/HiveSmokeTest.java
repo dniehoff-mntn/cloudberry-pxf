@@ -1,5 +1,6 @@
 package org.greenplum.pxf.automation.smoke;
 
+import annotations.WorksWithFDW;
 import jsystem.framework.system.SystemManagerImpl;
 
 import org.greenplum.pxf.automation.components.hive.Hive;
@@ -65,11 +66,12 @@ public class HiveSmokeTest extends BaseSmoke {
 
     @Override
     protected void queryResults() throws Exception {
-        runTincTest("pxf.smoke.small_data.runTest");
-        runTincTest("pxf.smoke.hcatalog_small_data.runTest");
+        runSqlTest("smoke/small_data");
+        runSqlTest("smoke/hcatalog_small_data");
     }
 
     @Test(groups = { "smoke", "gpdb", "security" })
+    @WorksWithFDW
     public void test() throws Exception {
         runTest();
     }

@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -55,6 +57,16 @@ public class ProfilesConfTest {
         Exception e = assertThrows(ProfileConfException.class,
                 () -> profilesConf.getPlugins("UndefinedProfile"));
         assertEquals("UndefinedProfile is not defined in profile/undefinedProfile/pxf-profiles.xml", e.getMessage());
+    }
+
+    @Test
+    public void undefinedDynamicProfile() {
+        String profileName = "test:foo";
+        ProfilesConf profilesConf = getProfilesConfWithTestDynamicRegex("undefinedProfile");
+        assertNull(profilesConf.getHandler(profileName));
+        assertNull(profilesConf.getOptionMappings(profileName));
+        assertNull(profilesConf.getPlugins(profileName));
+        assertNull(profilesConf.getProtocol(profileName));
     }
 
     @Test
@@ -183,7 +195,7 @@ public class ProfilesConfTest {
     public void testMalformedXmlFile() {
         Exception e = assertThrows(ProfileConfException.class,
                 () -> getProfilesConf("malformedXmlFile"));
-        assertTrue(e.getMessage().contains("Content is not allowed in prolog"));
+        assertThat(e.getMessage(), matchesPattern("^Profiles configuration .+ could not be loaded:.*"));
     }
 
     @Test
@@ -194,6 +206,12 @@ public class ProfilesConfTest {
 
     private ProfilesConf getProfilesConf(String testCase) {
         return new ProfilesConf(String.format("profile/%s/pxf-profiles-default.xml", testCase),
-                String.format("profile/%s/pxf-profiles.xml", testCase));
+                String.format("profile/%s/pxf-profiles.xml", testCase), null);
     }
+
+    private ProfilesConf getProfilesConfWithTestDynamicRegex(String testCase) {
+        return new ProfilesConf(String.format("profile/%s/pxf-profiles-default.xml", testCase),
+                String.format("profile/%s/pxf-profiles.xml", testCase), "test:.*");
+    }
+
 }

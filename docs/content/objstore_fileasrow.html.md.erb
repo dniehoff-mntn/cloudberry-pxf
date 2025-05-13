@@ -19,7 +19,7 @@ Use the `<objstore>:text:multi` profile to read multiple files in an object stor
 | Object Store  | Profile Prefix |
 |-------|-------------------------------------|
 | Azure Blob Storage   | wasbs |
-| Azure Data Lake    | adl |
+| Azure Data Lake Storage Gen2    | abfss |
 | Google Cloud Storage    | gs |
 | MinIO    | s3 |
 | S3    | s3 |
@@ -33,7 +33,7 @@ CREATE EXTERNAL TABLE <table_name>
   FORMAT 'CSV');
 ```
 
-The specific keywords and values used in the Greenplum Database [CREATE EXTERNAL TABLE](https://docs.vmware.com/en/VMware-Tanzu-Greenplum/6/greenplum-database/GUID-ref_guide-sql_commands-CREATE_EXTERNAL_TABLE.html) command are described in the table below.
+The specific keywords and values used in the Greenplum Database [CREATE EXTERNAL TABLE](https://docs.vmware.com/en/VMware-Greenplum/6/greenplum-database/ref_guide-sql_commands-CREATE_EXTERNAL_TABLE.html) command are described in the table below.
 
 | Keyword  | Value |
 |-------|-------------------------------------|

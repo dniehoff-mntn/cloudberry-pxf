@@ -1,5 +1,6 @@
 package org.greenplum.pxf.automation.features.cloud;
 
+import annotations.WorksWithFDW;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.greenplum.pxf.automation.components.hdfs.Hdfs;
@@ -15,6 +16,7 @@ import java.util.UUID;
 /**
  * Functional CloudAccess Test
  */
+@WorksWithFDW
 public class CloudAccessTest extends BaseFeature {
 
     private static final String PROTOCOL_S3 = "s3a://";
@@ -62,8 +64,10 @@ public class CloudAccessTest extends BaseFeature {
     @Override
     protected void afterMethod() throws Exception {
         super.afterMethod();
-        s3Server.removeDirectory(PROTOCOL_S3 + s3PathRead);
-        s3Server.removeDirectory(PROTOCOL_S3 + s3PathWrite);
+        if (s3Server != null) {
+            s3Server.removeDirectory(PROTOCOL_S3 + s3PathRead);
+            s3Server.removeDirectory(PROTOCOL_S3 + s3PathWrite);
+        }
     }
 
     protected void prepareData() throws Exception {
@@ -113,7 +117,7 @@ public class CloudAccessTest extends BaseFeature {
 
     /*
      * The tests below are for the case where there's a Hadoop cluster configured under "default" server
-     * both without and with Kerberos security, testing that clud access works in presence of "default" server
+     * both without and with Kerberos security, testing that cloud access works in presence of "default" server
      */
 
     @Test(groups = {"gpdb", "security"})
@@ -162,7 +166,7 @@ public class CloudAccessTest extends BaseFeature {
         }
         gpdb.createTableAndVerify(exTable);
 
-        runTincTest("pxf.features.cloud_access." + name + ".runTest");
+        runSqlTest("features/cloud_access/" + name);
     }
 
     private void runTestScenarioForWrite(String name, String server, boolean creds) throws Exception {
@@ -187,6 +191,6 @@ public class CloudAccessTest extends BaseFeature {
         }
         gpdb.createTableAndVerify(exTable);
 
-        runTincTest("pxf.features.cloud_access." + name + ".runTest");
+        runSqlTest("features/cloud_access/" + name);
     }
 }

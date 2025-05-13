@@ -1,5 +1,6 @@
 package org.greenplum.pxf.automation.smoke;
 
+import annotations.WorksWithFDW;
 import org.greenplum.pxf.automation.structures.tables.basic.Table;
 import org.greenplum.pxf.automation.structures.tables.utils.TableFactory;
 import org.testng.annotations.Test;
@@ -32,10 +33,11 @@ public class HdfsSmokeTest extends BaseSmoke {
 
     @Override
     protected void queryResults() throws Exception {
-        runTincTest("pxf.smoke.small_data.runTest");
+        runSqlTest("smoke/small_data");
     }
 
     @Test(groups = { "smoke", "gpdb", "security" })
+    @WorksWithFDW
     public void test() throws Exception {
         runTest();
     }

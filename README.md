@@ -66,16 +66,15 @@ To build PXF, you must have:
     To install Go on CentOS, `sudo yum install go`. For other platforms, see the [Go downloads page](https://golang.org/dl/).
 
     Make sure to export your `GOPATH` and add go to your `PATH`. For example:
-    ```
+    ```shell
     export GOPATH=$HOME/go
     export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
     ```
 
-    Once you have installed Go, you will need the `ginkgo` tool which runs Go tests,
-    respectively. Assuming `go` is on your `PATH`, you can run:
-    ```
-    go install github.com/onsi/ginkgo/ginkgo@latest
-    ```
+   For the new M1 Apple Macs, add the following to your path instead
+   ```shell
+   export PATH=$PATH:/opt/homebrew/bin/go/bin:$GOPATH/bin
+   ```
 
 5. cURL (7.29 or later):
 
@@ -324,6 +323,8 @@ no JDK set for Gradle. Just cancel and retry. It goes away the second time.
 - Run a query in CloudberryDB that uses PXF to debug with IntelliJ
 
 ## To run a Kerberized Hadoop Cluster
+
+- See instructions in the dev folder for spinning up a kerberized Dataproc cluster in GCP.
 
 ### Requirements
 

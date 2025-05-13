@@ -6,7 +6,7 @@ You can use the PXF HDFS connector to read one or more multi-line text files in 
 
 PXF supports reading only text and JSON files in this manner.
 
-**Note**: Refer to the [Reading JSON Data from HDFS](hdfs_json.html) topic if you want to use PXF to read JSON files that include more than one record.
+**Note**: Refer to the [Reading and Writing JSON Data in HDFS](hdfs_json.html) topic if you want to use PXF to read JSON files that include more than one record.
 
 
 ## <a id="prereq"></a>Prerequisites
@@ -29,7 +29,7 @@ CREATE EXTERNAL TABLE <table_name>
 FORMAT 'CSV');
 ```
 
-The keywords and values used in the Greenplum Database [CREATE EXTERNAL TABLE](https://docs.vmware.com/en/VMware-Tanzu-Greenplum/6/greenplum-database/GUID-ref_guide-sql_commands-CREATE_EXTERNAL_TABLE.html) command are described in the table below.
+The keywords and values used in the Greenplum Database [CREATE EXTERNAL TABLE](https://docs.vmware.com/en/VMware-Greenplum/6/greenplum-database/ref_guide-sql_commands-CREATE_EXTERNAL_TABLE.html) command are described in the table below.
 
 | Keyword  | Value |
 |-------|-------------------------------------|
@@ -84,7 +84,7 @@ SELECT json_array_elements(j1->'root')->'record_obj'->'user'->'id'
 (1 rows)
 ```
 
-Refer to [Working with JSON Data](https://docs.vmware.com/en/VMware-Tanzu-Greenplum/6/greenplum-database/GUID-admin_guide-query-topics-json-data.html) in the Greenplum Documentation for specific information on manipulating JSON data in Greenplum.
+Refer to [Working with JSON Data](https://docs.vmware.com/en/VMware-Greenplum/6/greenplum-database/admin_guide-query-topics-json-data.html) in the Greenplum Documentation for specific information on manipulating JSON data in Greenplum.
 
 
 ### <a id="example_fileasrow"></a>Example: Reading an HDFS Text File into a Single Table Row

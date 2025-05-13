@@ -1,159 +1,69 @@
 package org.greenplum.pxf.automation.features.filterpushdown;
 
-import org.greenplum.pxf.automation.components.cluster.PhdCluster;
+import annotations.SkipForFDW;
+import annotations.WorksWithFDW;
 import org.greenplum.pxf.automation.features.BaseFeature;
-import org.greenplum.pxf.automation.structures.tables.pxf.ReadableExternalTable;
+import org.greenplum.pxf.automation.structures.tables.utils.TableFactory;
 import org.testng.annotations.Test;
-
-import java.io.File;
 
 /**
  * Functional PXF filter pushdown cases
  */
+@WorksWithFDW
 public class FilterPushDownTest extends BaseFeature {
 
-    String testPackageLocation = "/org/greenplum/pxf/automation/testplugin/";
-    String testPackage = "org.greenplum.pxf.automation.testplugin.";
+    private static final String COMMA = ",";
 
-    @Override
-    protected void beforeClass() throws Exception {
-        String newPath = "/tmp/publicstage/pxf";
-        // copy additional plugins classes to cluster nodes, used for filter pushdown cases
-        cluster.copyFileToNodes(new File("target/classes/" + testPackageLocation + "FilterVerifyFragmentMetadata.class").getAbsolutePath(), newPath + testPackageLocation, true, false);
-        cluster.copyFileToNodes(new File("target/classes/" + testPackageLocation + "FilterVerifyFragmenter.class").getAbsolutePath(), newPath + testPackageLocation, true, false);
-        cluster.copyFileToNodes(new File("target/classes/" + testPackageLocation + "UserDataVerifyAccessor.class").getAbsolutePath(), newPath + testPackageLocation, true, false);
-        // add new path to classpath file and restart PXF service
-        cluster.addPathToPxfClassPath(newPath);
-        cluster.restart(PhdCluster.EnumClusterServices.pxf);
-    }
-
-    @Override
-    protected void afterClass() throws Exception {
-        super.afterClass();
-    }
+    private static final String[] FIELDS = new String[]{
+            "t0    text",
+            "a1    integer",
+            "b2    boolean",
+            "c3    numeric",
+            "d4    char(3)",
+            "e5    varchar(2)",
+            "filterValue  text"
+    };
 
     /**
-     * Check PXF receive the expected filter string from GPDB.
-     * Column delimiter is ",".
-     *
+     * Check that PXF receives the expected filter string, using a table with a comma delimiter
      * @throws Exception
      */
     @Test(groups = {"features", "gpdb", "security"})
     public void checkFilterPushDown() throws Exception {
-
-        // Create PXF external table for filter testing
-        ReadableExternalTable pxfExternalTable = new ReadableExternalTable("test_filter", new String[]{
-                "t0    text",
-                "a1    integer",
-                "b2    boolean",
-                "filterValue  text"
-        }, "dummy_path", "TEXT");
-
-        pxfExternalTable.setFragmenter(testPackage + "FilterVerifyFragmenter");
-        pxfExternalTable.setAccessor(testPackage + "UserDataVerifyAccessor");
-        pxfExternalTable.setResolver("org.greenplum.pxf.plugins.hdfs.StringPassResolver");
-        pxfExternalTable.setDelimiter(",");
-        pxfExternalTable.setHost(pxfHost);
-        pxfExternalTable.setPort(pxfPort);
-
-        gpdb.createTableAndVerify(pxfExternalTable);
-
-        runTincTest("pxf.features.filterpushdown.checkFilterPushDown.runTest");
-
-        // Recreate the table with the first column as varchar instead of text
-        pxfExternalTable = new ReadableExternalTable("test_filter", new String[]{
-                "t0    varchar(1)",
-                "a1    integer",
-                "b2    boolean",
-                "filterValue  text"
-        }, "dummy_path", "TEXT");
-
-        pxfExternalTable.setFragmenter(testPackage + "FilterVerifyFragmenter");
-        pxfExternalTable.setAccessor(testPackage + "UserDataVerifyAccessor");
-        pxfExternalTable.setResolver("org.greenplum.pxf.plugins.hdfs.StringPassResolver");
-        pxfExternalTable.setDelimiter(",");
-        pxfExternalTable.setHost(pxfHost);
-        pxfExternalTable.setPort(pxfPort);
-
-        gpdb.createTableAndVerify(pxfExternalTable);
-
-        runTincTest("pxf.features.filterpushdown.checkFilterPushDown.runTest");
+        preparePxfTable(COMMA);
+        runSqlTest("features/filterpushdown/checkFilterPushDown");
     }
 
     /**
-     * Check PXF receive the expected filter string from gpdb/gpdb.
-     * Column delimiter is ",".
-     *
+     * Check that PXF receives no filter string, using a table with a comma delimiter
      * @throws Exception
      */
     @Test(groups = {"features", "gpdb", "security"})
+    @SkipForFDW // the guc used in the test is not applicable to FDW and has no effect
     public void checkFilterPushDownDisabled() throws Exception {
-
-        // Create PXF external table for filter testing
-        ReadableExternalTable pxfExternalTable = new ReadableExternalTable("test_filter", new String[]{
-                "t0    text",
-                "a1    integer",
-                "b2    boolean",
-                "filterValue  text"
-        }, "dummy_path", "TEXT");
-
-        pxfExternalTable.setFragmenter(testPackage + "FilterVerifyFragmenter");
-        pxfExternalTable.setAccessor(testPackage + "UserDataVerifyAccessor");
-        pxfExternalTable.setResolver("org.greenplum.pxf.plugins.hdfs.StringPassResolver");
-        pxfExternalTable.setDelimiter(",");
-        pxfExternalTable.setHost(pxfHost);
-        pxfExternalTable.setPort(pxfPort);
-
-        gpdb.createTableAndVerify(pxfExternalTable);
-
-        runTincTest("pxf.features.filterpushdown.checkFilterPushDownDisabled.runTest");
+        preparePxfTable(COMMA);
+        runSqlTest("features/filterpushdown/checkFilterPushDownDisabled");
     }
 
     /**
-     * Check PXF receive the expected filter string
-     * Column delimiter is hexadecimal
-     *
+     * Check that PXF receives the expected filter string, using a table with a hexademical delimiter
      * @throws Exception
      */
     @Test(groups = {"features", "gpdb", "security"})
     public void checkFilterStringHexDelimiter() throws Exception {
+        preparePxfTable("E'\\x01'");
+        runSqlTest("features/filterpushdown/checkFilterPushDownHexDelimiter");
+    }
 
+    /**
+     * Prepares a PXF external text table with a given delimiter.
+     * @param delimiter delimiter
+     * @throws Exception
+     */
+    private void preparePxfTable(String delimiter) throws Exception {
         // Create PXF external table for filter testing
-        ReadableExternalTable pxfExternalTable = new ReadableExternalTable("test_filter", new String[]{
-                "t0    text",
-                "a1    integer",
-                "b2    boolean",
-                "filterValue  text"
-        }, "dummy_path", "TEXT");
-
-        pxfExternalTable.setFragmenter(testPackage + "FilterVerifyFragmenter");
-        pxfExternalTable.setAccessor(testPackage + "UserDataVerifyAccessor");
-        pxfExternalTable.setResolver("org.greenplum.pxf.plugins.hdfs.StringPassResolver");
-        pxfExternalTable.setDelimiter("E'\\x01'");
-        pxfExternalTable.setHost(pxfHost);
-        pxfExternalTable.setPort(pxfPort);
-
-        gpdb.createTableAndVerify(pxfExternalTable);
-
-        // Recreate the table with the first column as varchar instead of text
-        runTincTest("pxf.features.filterpushdown.checkFilterPushDownHexDelimiter.runTest");
-
-        pxfExternalTable = new ReadableExternalTable("test_filter", new String[]{
-                "t0    varchar(1)",
-                "a1    integer",
-                "b2    boolean",
-                "filterValue  text"
-        }, "dummy_path", "TEXT");
-
-        pxfExternalTable.setFragmenter(testPackage + "FilterVerifyFragmenter");
-        pxfExternalTable.setAccessor(testPackage + "UserDataVerifyAccessor");
-        pxfExternalTable.setResolver("org.greenplum.pxf.plugins.hdfs.StringPassResolver");
-        pxfExternalTable.setDelimiter("E'\\x01'");
-        pxfExternalTable.setHost(pxfHost);
-        pxfExternalTable.setPort(pxfPort);
-
-        gpdb.createTableAndVerify(pxfExternalTable);
-
-        runTincTest("pxf.features.filterpushdown.checkFilterPushDownHexDelimiter.runTest");
+        exTable = TableFactory.getPxfReadableTestCSVTable("test_filter", FIELDS, "dummy_path", delimiter);
+        exTable.setProfile("system:filter"); // use system:filter profile shipped with PXF server
+        gpdb.createTableAndVerify(exTable);
     }
 }

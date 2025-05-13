@@ -18,16 +18,18 @@ public class MultiUserTest extends BaseFeature {
             "num1  int",
             "dub1  double precision",
             "dec1  numeric",
-            "tm timestamp",
-            "r real",
-            "bg bigint",
-            "b boolean",
-            "tn smallint",
-            "sml smallint",
-            "dt date",
-            "vc1 varchar(5)",
-            "c1 char(3)",
-            "bin bytea"
+            "tm    timestamp",
+            "r     real",
+            "bg    bigint",
+            "b     boolean",
+            "tn    smallint",
+            "sml   smallint",
+            "dt    date",
+            "vc1   varchar(5)",
+            "c1    char(3)",
+            "bin   bytea",
+            "u     uuid",
+            "tmz timestamp with time zone"
     };
     private static final String gpdbTypesDataFileName = "gpdb_types.txt";
     private static final String gpdbTypesExDataFileName = "gpdb_types_ex.txt";
@@ -89,6 +91,6 @@ public class MultiUserTest extends BaseFeature {
 
     @Test(groups = {"features", "gpdb", "security"})
     public void testUsers() throws Exception {
-        runTincTest("pxf.features.multi_user.runTest");
+        runSqlTest("features/multi_user");
     }
 }

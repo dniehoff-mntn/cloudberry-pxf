@@ -1,7 +1,7 @@
 #!/bin/bash
 
-mkdir -p /usr/local/greenplum-db
-chown -R gpadmin:gpadmin /usr/local/greenplum-db
+mkdir -p /usr/local/cloudberry-db
+chown -R gpadmin:gpadmin /usr/local/cloudberry-db
 
 # TODO: check if gpadmin-limits.conf already exists and bail out if it does
 >/etc/security/limits.d/gpadmin-limits.conf cat <<-EOF
@@ -14,7 +14,7 @@ EOF
 export PS1="[\u@\h \W]\$ "
 source /opt/rh/devtoolset-6/enable
 export HADOOP_ROOT=~/workspace/singlecluster
-export PXF_HOME=/usr/local/greenplum-db-devel/pxf
+export PXF_HOME=/usr/local/cloudberry-db/pxf
 export GPHD_ROOT=~/workspace/singlecluster
 export BUILD_PARAMS="-x test"
 export LANG=en_US.UTF-8

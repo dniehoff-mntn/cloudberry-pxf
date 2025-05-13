@@ -1,0 +1,26 @@
+-- start_ignore
+-- end_ignore
+-- @description query01 for PXF test for cloud access where server is specified, no credentials are specified, and configuration file contains invalid credentials
+--
+-- start_matchsubs
+--
+-- # create a match/subs
+--
+-- m/PXF server error.*(com.amazonaws.services.s3.model.AmazonS3Exception: Forbidden).*/
+-- s/PXF server error.*/PXF server error : com.amazonaws.services.s3.model.AmazonS3Exception: Forbidden/
+--
+-- m/DETAIL/
+-- s/DETAIL/CONTEXT/
+--
+-- m/pxf:\/\/(.*)\/pxf_automation_data/
+-- s/pxf:\/\/.*PROFILE/pxf:\/\/pxf_automation_data?PROFILE/
+--
+-- m/CONTEXT:.*line.*/
+-- s/line \d* of //g
+--
+-- m/, file.*pxf_automation_data/
+-- s/, file.*pxf_automation_data.*/pxf_automation_data/
+--
+-- end_matchsubs
+
+SELECT *  FROM cloudaccess_server_no_credentials_invalid_config;

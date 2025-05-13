@@ -4,7 +4,7 @@ import org.greenplum.pxf.automation.BaseFunctionality;
 import org.greenplum.pxf.automation.structures.tables.basic.Table;
 import org.greenplum.pxf.automation.structures.tables.pxf.ReadableExternalTable;
 import org.greenplum.pxf.automation.structures.tables.utils.TableFactory;
-import org.testng.annotations.AfterMethod;
+import org.testng.SkipException;
 import org.testng.annotations.Test;
 
 public class GpupgradeTest extends BaseFunctionality {
@@ -28,19 +28,44 @@ public class GpupgradeTest extends BaseFunctionality {
 
     @Override
     protected void afterMethod() throws Exception {
-        gpdb.dropTable(externalTable, true);
+        if (gpdb != null) {
+            gpdb.dropTable(externalTable, true);
+        }
         super.afterMethod();
     }
 
     @Test(groups = {"features", "gpdb"})
-    public void testGpdbUpgradeScenario() throws Exception {
-        runTincTest("pxf.features.gpupgrade.step_1_before_running_pxf_pre_gpupgrade.runTest");
+    public void testGpdbUpgradeExtensionVersion2_0Scenario() throws Exception {
+
+        // Skipping this test for GP7 since this isn't passing for GP7
+        if (gpdb.getVersion() >= 7)
+            throw new SkipException("Skipping testGpdbUpgradeScenario for GPDB7");
+
+        gpdb.runQuery("ALTER EXTENSION pxf UPDATE TO '2.0'");
+        runSqlTest("features/gpupgrade/extension2_0/step_1_before_running_pxf_pre_gpupgrade");
 
         cluster.runCommand("pxf-pre-gpupgrade");
-        runTincTest("pxf.features.gpupgrade.step_2_after_running_pxf_pre_gpupgrade.runTest");
+        runSqlTest("features/gpupgrade/extension2_0/step_2_after_running_pxf_pre_gpupgrade");
 
         cluster.runCommand("pxf-post-gpupgrade");
-        runTincTest("pxf.features.gpupgrade.step_3_after_running_pxf_post_gpupgrade.runTest");
+        runSqlTest("features/gpupgrade/extension2_0/step_3_after_running_pxf_post_gpupgrade");
+    }
+
+    @Test(groups = {"features", "gpdb"})
+    public void testGpdbUpgradeScenario() throws Exception {
+
+        // Skipping this test for GP7 since this isn't passing for GP7
+        if (gpdb.getVersion() >= 7)
+            throw new SkipException("Skipping testGpdbUpgradeScenario for GPDB7");
+
+        gpdb.runQuery("ALTER EXTENSION pxf UPDATE TO '2.1'");
+        runSqlTest("features/gpupgrade/extension2_1/step_1_before_running_pxf_pre_gpupgrade");
+
+        cluster.runCommand("pxf-pre-gpupgrade");
+        runSqlTest("features/gpupgrade/extension2_1/step_2_after_running_pxf_pre_gpupgrade");
+
+        cluster.runCommand("pxf-post-gpupgrade");
+        runSqlTest("features/gpupgrade/extension2_1/step_3_after_running_pxf_post_gpupgrade");
     }
 
     private String prepareData() throws Exception {

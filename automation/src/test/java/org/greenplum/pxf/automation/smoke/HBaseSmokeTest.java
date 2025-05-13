@@ -1,5 +1,6 @@
 package org.greenplum.pxf.automation.smoke;
 
+import annotations.WorksWithFDW;
 import jsystem.framework.system.SystemManagerImpl;
 
 import org.greenplum.pxf.automation.components.common.ShellSystemObject;
@@ -85,10 +86,11 @@ public class HBaseSmokeTest extends BaseSmoke {
 
     @Override
     protected void queryResults() throws Exception {
-        runTincTest("pxf.smoke.small_data.runTest");
+        runSqlTest("smoke/small_data");
     }
 
     @Test(groups = { "smoke", "gpdb", "hbase" })
+    @WorksWithFDW
     public void test() throws Exception {
         runTest();
     }

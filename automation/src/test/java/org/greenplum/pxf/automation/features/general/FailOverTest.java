@@ -1,5 +1,6 @@
 package org.greenplum.pxf.automation.features.general;
 
+import annotations.FailsWithFDW;
 import org.greenplum.pxf.automation.components.cluster.PhdCluster;
 import org.greenplum.pxf.automation.features.BaseFeature;
 import org.greenplum.pxf.automation.structures.tables.pxf.ReadableExternalTable;
@@ -8,6 +9,7 @@ import org.testng.annotations.Test;
 import java.io.File;
 
 /** Tests how failures are handled **/
+@FailsWithFDW
 public class FailOverTest extends BaseFeature {
 
     String testPackageLocation = "/org/greenplum/pxf/automation/testplugin/";
@@ -26,17 +28,19 @@ public class FailOverTest extends BaseFeature {
     @Override
     protected void afterClass() throws Exception {
         super.afterClass();
-        // We need to restore the service after it has been killed
-        cluster.start(PhdCluster.EnumClusterServices.pxf);
+        // We need to restore the service after it has been stopped
+        if (cluster != null) {
+            cluster.start(PhdCluster.EnumClusterServices.pxf);
+        }
     }
 
     /**
-     * Should kill the JVM by invoking OutOfMemoryFragmenter
+     * Should stop the JVM by invoking OutOfMemoryFragmenter
      *
      * @throws Exception
      */
     @Test(groups = {"features", "gpdb", "security"})
-    public void killTomcatOnOutOfMemory() throws Exception {
+    public void stopTomcatOnOutOfMemory() throws Exception {
 
         // Create PXF external table for out of memory testing
         ReadableExternalTable pxfExternalTable = new ReadableExternalTable("test_out_of_memory", new String[] {
@@ -55,6 +59,6 @@ public class FailOverTest extends BaseFeature {
 
         gpdb.createTableAndVerify(pxfExternalTable);
 
-        runTincTest("pxf.features.general.outOfMemory.runTest");
+        runSqlTest("features/general/outOfMemory");
     }
 }

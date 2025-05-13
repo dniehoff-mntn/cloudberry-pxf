@@ -1,11 +1,14 @@
 package org.greenplum.pxf.automation.features.orc;
 
+import annotations.FailsWithFDW;
+import annotations.WorksWithFDW;
 import org.greenplum.pxf.automation.features.BaseFeature;
-import org.greenplum.pxf.automation.structures.tables.pxf.ReadableExternalTable;
+import org.greenplum.pxf.automation.structures.tables.utils.TableFactory;
 import org.greenplum.pxf.automation.utils.system.ProtocolEnum;
 import org.greenplum.pxf.automation.utils.system.ProtocolUtils;
 import org.testng.annotations.Test;
 
+@WorksWithFDW
 public class OrcReadTest extends BaseFeature {
 
     private static final String ORC_PRIMITIVE_TYPES = "orc_types.orc";
@@ -101,63 +104,75 @@ public class OrcReadTest extends BaseFeature {
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadPrimitives() throws Exception {
-        runTincTest("pxf.features.orc.read.primitive_types.runTest");
+        runSqlTest("features/orc/read/primitive_types");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadPrimitivesMapByPosition() throws Exception {
         prepareReadableExternalTable(PXF_ORC_TABLE, ORC_TABLE_COLUMNS,
                 hdfsPath + ORC_PRIMITIVE_TYPES, true);
-        runTincTest("pxf.features.orc.read.primitive_types.runTest");
+        runSqlTest("features/orc/read/primitive_types");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadPrimitivesWithUnorderedSubsetFile() throws Exception {
         prepareReadableExternalTable("pxf_orc_primitive_types_with_subset",
                 ORC_TABLE_COLUMNS, hdfsPath + "orc_types*.orc");
-        runTincTest("pxf.features.orc.read.primitive_types_with_subset.runTest");
+        runSqlTest("features/orc/read/primitive_types_with_subset");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadSubset() throws Exception {
         prepareReadableExternalTable("pxf_orc_primitive_types_subset",
                 ORC_TABLE_COLUMNS_SUBSET, hdfsPath + ORC_PRIMITIVE_TYPES);
-        runTincTest("pxf.features.orc.read.read_subset.runTest");
+        runSqlTest("features/orc/read/read_subset");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcPredicatePushDown() throws Exception {
-        runTincTest("pxf.features.orc.read.pushdown.runTest");
+        runSqlTest("features/orc/read/pushdown");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcPredicatePushDownMapByPosition() throws Exception {
         prepareReadableExternalTable(PXF_ORC_TABLE, ORC_TABLE_COLUMNS, hdfsPath + ORC_PRIMITIVE_TYPES, true);
-        runTincTest("pxf.features.orc.read.pushdown.runTest");
+        runSqlTest("features/orc/read/pushdown");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadLists() throws Exception {
         prepareReadableExternalTable("pxf_orc_list_types", ORC_LIST_TYPES_TABLE_COLUMNS, hdfsPath + ORC_LIST_TYPES);
-        runTincTest("pxf.features.orc.read.list_types.runTest");
+        runSqlTest("features/orc/read/list_types");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadBpCharAndVarCharListsAsTextArr() throws Exception {
         prepareReadableExternalTable("pxf_orc_bpchar_varchar_list_types_as_textarr", ORC_LIST_TYPES_TABLE_COLUMNS_TEXT, hdfsPath + ORC_LIST_TYPES);
-        runTincTest("pxf.features.orc.read.bpchar_varchar_list_types_as_textarr.runTest");
+        runSqlTest("features/orc/read/bpchar_varchar_list_types_as_textarr");
     }
 
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadMultiDimensionalLists() throws Exception {
         prepareReadableExternalTable("pxf_orc_multidim_list_types", ORC_LIST_TYPES_TABLE_COLUMNS, hdfsPath + ORC_MULTIDIM_LIST_TYPES);
-        runTincTest("pxf.features.orc.read.multidim_list_types.runTest");
+        runSqlTest("features/orc/read/multidim_list_types");
     }
 
+    /*
+     * FDW fails for the data that contain a NUL-byte (i.e. '\/u000'"). This behaviour is different from external-table but same as GPDB Heap
+     * FDW Failure: invalid byte sequence for encoding "UTF8": 0x00
+     *
+     * GPDB also throws the same error when copying the data containing a NUL-byte
+     *
+     * postgres=# copy test from '/Users/pandeyhi/Documents/bad_data.txt' ;
+     * ERROR:  invalid byte sequence for encoding "UTF8": 0x00
+     * TODO Do we need to do some changes to make sure the external-table behaves the same way as GPDB/FDW?
+     *
+     */
+    @FailsWithFDW
     @Test(groups = {"features", "gpdb", "security", "hcfs"})
     public void orcReadStringsContainingNullByte() throws Exception {
         prepareReadableExternalTable("pxf_orc_null_in_string", ORC_NULL_IN_STRING_COLUMNS, hdfsPath + ORC_NULL_IN_STRING);
-        runTincTest("pxf.features.orc.read.null_in_string.runTest");
+        runSqlTest("features/orc/read/null_in_string");
     }
 
     private void prepareReadableExternalTable(String name, String[] fields, String path) throws Exception {
@@ -165,15 +180,10 @@ public class OrcReadTest extends BaseFeature {
     }
 
     private void prepareReadableExternalTable(String name, String[] fields, String path, boolean mapByPosition) throws Exception {
-        exTable = new ReadableExternalTable(name, fields,
-                protocol.getExternalTablePath(hdfs.getBasePath(), path), "custom");
-        exTable.setFormatter("pxfwritable_import");
-        exTable.setProfile(protocol.value() + ":orc");
-
+        exTable = TableFactory.getPxfHcfsReadableTable(name, fields, path, hdfs.getBasePath(), "orc");
         if (mapByPosition) {
             exTable.setUserParameters(new String[]{"MAP_BY_POSITION=true"});
         }
-
         createTable(exTable);
     }
 }

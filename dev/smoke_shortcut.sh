@@ -3,19 +3,19 @@ set -e
 
 ~/workspace/pxf/dev/install_gpdb.bash
 
-source /usr/local/greenplum-db-devel/greenplum_path.sh
+source /usr/local/cloudberry-db/greenplum_path.sh
 make -C ~/workspace/gpdb create-demo-cluster
 source ~/workspace/gpdb/gpAux/gpdemo/gpdemo-env.sh
 
 ~/workspace/pxf/dev/configure_singlecluster.bash
 
 pushd ~/workspace/singlecluster/bin
-  echo y | ./init-gphd.sh
-  ./start-hdfs.sh
-  ./start-yarn.sh
-  ./start-hive.sh
-  ./start-zookeeper.sh
-  ./start-hbase.sh
+echo y | ./init-gphd.sh
+./start-hdfs.sh
+./start-yarn.sh
+./start-hive.sh
+./start-zookeeper.sh
+./start-hbase.sh
 popd
 
 make -C ~/workspace/pxf install

@@ -2,6 +2,7 @@ package org.greenplum.pxf.service;
 
 import org.apache.commons.lang.StringUtils;
 import org.greenplum.pxf.api.error.PxfRuntimeException;
+import org.greenplum.pxf.api.model.GreenplumCSV;
 import org.greenplum.pxf.api.model.OutputFormat;
 import org.greenplum.pxf.api.model.PluginConf;
 import org.greenplum.pxf.api.model.RequestContext;
@@ -152,12 +153,18 @@ public class HttpRequestParser implements RequestParser<MultiValueMap<String, St
         String config = params.removeUserProperty("CONFIG");
         context.setConfig(StringUtils.isNotBlank(config) ? config : context.getServerName());
 
-        String maxFrags = params.removeUserProperty("STATS-MAX-FRAGMENTS");
+        // STATS-MAX-FRAGMENTS is deprecated in favor of STATS_MAX_FRAGMENTS for FDW options support
+        String maxFrags = StringUtils.defaultString(
+                params.removeUserProperty("STATS_MAX_FRAGMENTS"),
+                params.removeUserProperty("STATS-MAX-FRAGMENTS"));
         if (!StringUtils.isBlank(maxFrags)) {
             context.setStatsMaxFragments(Integer.parseInt(maxFrags));
         }
 
-        String sampleRatioStr = params.removeUserProperty("STATS-SAMPLE-RATIO");
+        // STATS-SAMPLE-RATIO is deprecated in favor of STATS_SAMPLE_RATIO for FDW options support
+        String sampleRatioStr = StringUtils.defaultString(
+                params.removeUserProperty("STATS_SAMPLE_RATIO"),
+                params.removeUserProperty("STATS-SAMPLE-RATIO"));
         if (!StringUtils.isBlank(sampleRatioStr)) {
             context.setStatsSampleRatio(Float.parseFloat(sampleRatioStr));
         }
@@ -233,7 +240,9 @@ public class HttpRequestParser implements RequestParser<MultiValueMap<String, St
         // Call the protocol handler for any protocol-specific logic handling
         if (StringUtils.isNotBlank(profile)) {
             String handlerClassName = pluginConf.getHandler(profile);
-            Utilities.updatePlugins(context, handlerClassName);
+            if (handlerClassName != null) {
+                Utilities.updatePlugins(context, handlerClassName);
+            }
         }
 
         // validate that the result has all required fields, and values are in valid ranges
@@ -247,12 +256,30 @@ public class HttpRequestParser implements RequestParser<MultiValueMap<String, St
     }
 
     private void parseGreenplumCSV(RequestMap params, RequestContext context) {
-        context.getGreenplumCSV()
-                .withDelimiter(params.removeUserProperty("DELIMITER"))
-                .withEscapeChar(params.removeUserProperty("ESCAPE"))
-                .withNewline(params.removeUserProperty("NEWLINE"))
-                .withQuoteChar(params.removeUserProperty("QUOTE"))
-                .withValueOfNull(params.removeUserProperty("NULL"));
+        // TODO: produce one with different defaults for TEXT vs CSV
+        GreenplumCSV greenplumCSV = context.getGreenplumCSV();
+
+        // override default format options with values that are specified in the request
+        String delimiter = params.removeUserProperty("DELIMITER");
+        if (delimiter != null) {
+            greenplumCSV.withDelimiter(delimiter);
+        }
+        String escape = params.removeUserProperty("ESCAPE");
+        if (escape != null) {
+            greenplumCSV.withEscapeChar(escape);
+        }
+        String newline = params.removeUserProperty("NEWLINE");
+        if (newline != null) {
+            greenplumCSV.withNewline(newline);
+        }
+        String quote = params.removeUserProperty("QUOTE");
+        if (quote != null) {
+            greenplumCSV.withQuoteChar(quote);
+        }
+        String nullValue = params.removeUserProperty("NULL");
+        if (nullValue != null) {
+            greenplumCSV.withValueOfNull(nullValue);
+        }
     }
 
     /**
@@ -272,6 +299,10 @@ public class HttpRequestParser implements RequestParser<MultiValueMap<String, St
 
         // get Profile's plugins from the configuration file
         Map<String, String> pluginsMap = pluginConf.getPlugins(profile);
+        if (pluginsMap == null) {
+            // a dynamic profile will have no plugins predefined
+            return;
+        }
 
         // create sets of keys to find out duplicates between what user has specified in the request
         // and what is configured in the configuration file -- DO NOT ALLOW DUPLICATES
@@ -288,7 +319,10 @@ public class HttpRequestParser implements RequestParser<MultiValueMap<String, St
         // add properties defined by profiles to the request map as if they were specified by the user
         pluginsMap.forEach((k, v) -> params.put(RequestMap.USER_PROP_PREFIX + k, v));
 
-        params.put(RequestMap.USER_PROP_PREFIX + PROFILE_SCHEME, pluginConf.getProtocol(profile));
+        String profileProtocol = pluginConf.getProtocol(profile);
+        if (profileProtocol != null) {
+            params.put(RequestMap.USER_PROP_PREFIX + PROFILE_SCHEME, profileProtocol);
+        }
     }
 
     /*

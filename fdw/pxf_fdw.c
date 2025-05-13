@@ -42,6 +42,12 @@ PG_MODULE_MAGIC;
 
 #define DEFAULT_PXF_FDW_STARTUP_COST   50000
 
+/*
+ * Error token embedded in the data sent by PXF as part of an error row
+ */
+#define PXF_ERROR_TOKEN "PXFERRMSG> "
+#define PXF_ERROR_TOKEN_SIZE strlen(PXF_ERROR_TOKEN)
+
 extern Datum pxf_fdw_handler(PG_FUNCTION_ARGS);
 
 /*
@@ -76,8 +82,13 @@ static void pxfReScanForeignScan(ForeignScanState *node);
 static void pxfEndForeignScan(ForeignScanState *node);
 
 /* Foreign updates */
+static void pxfBeginForeignInsert(ModifyTableState *mtstate, ResultRelInfo *resultRelInfo);
+
 static void pxfBeginForeignModify(ModifyTableState *mtstate, ResultRelInfo *resultRelInfo, List *fdw_private, int subplan_index, int eflags);
+
 static TupleTableSlot *pxfExecForeignInsert(EState *estate, ResultRelInfo *resultRelInfo, TupleTableSlot *slot, TupleTableSlot *planSlot);
+
+static void pxfEndForeignInsert(EState *estate, ResultRelInfo *resultRelInfo);
 
 static void pxfEndForeignModify(EState *estate, ResultRelInfo *resultRelInfo);
 
@@ -86,9 +97,13 @@ static int	pxfIsForeignRelUpdatable(Relation rel);
 /*
  * Helper functions
  */
+static PxfFdwModifyState *InitForeignModify(Relation relation);
+static void FinishForeignModify(PxfFdwModifyState *pxfmstate);
 static void InitCopyState(PxfFdwScanState *pxfsstate);
 static void InitCopyStateForModify(PxfFdwModifyState *pxfmstate);
 static CopyState BeginCopyTo(Relation forrel, List *options);
+static void PxfBeginScanErrorCallback(void *arg);
+static void PxfCopyFromErrorCallback(void *arg);
 
 /*
  * Foreign-data wrapper handler functions:
@@ -131,6 +146,9 @@ pxf_fdw_handler(PG_FUNCTION_ARGS)
 	 * taken
 	 */
 	fdw_routine->PlanForeignModify = NULL;
+#if PG_VERSION_NUM >= 120000
+	fdw_routine->BeginForeignInsert = pxfBeginForeignInsert;
+#endif
 	fdw_routine->BeginForeignModify = pxfBeginForeignModify;
 	fdw_routine->ExecForeignInsert = pxfExecForeignInsert;
 
@@ -140,6 +158,9 @@ pxf_fdw_handler(PG_FUNCTION_ARGS)
 	 */
 	fdw_routine->ExecForeignUpdate = NULL;
 	fdw_routine->ExecForeignDelete = NULL;
+#if PG_VERSION_NUM >= 120000
+	fdw_routine->EndForeignInsert = pxfEndForeignInsert;
+#endif
 	fdw_routine->EndForeignModify = pxfEndForeignModify;
 	fdw_routine->IsForeignRelUpdatable = pxfIsForeignRelUpdatable;
 
@@ -414,11 +435,22 @@ pxfBeginForeignScan(ForeignScanState *node, int eflags)
 	pxfsstate->quals = quals;
 	pxfsstate->relation = relation;
 	pxfsstate->retrieved_attrs = retrieved_attrs;
+	pxfsstate->projectionInfo = node->ss.ps.ps_ProjInfo;
+
+    /* Set up callback to identify error foreign relation. */
+    ErrorContextCallback errcallback;
+    errcallback.callback = PxfBeginScanErrorCallback;
+    errcallback.arg = (void *) pxfsstate;
+    errcallback.previous = error_context_stack;
+    error_context_stack = &errcallback;
 
 	InitCopyState(pxfsstate);
 	node->fdw_state = (void *) pxfsstate;
 
-	elog(DEBUG5, "pxf_fdw: pxfBeginForeignScan ends on segment: %d", PXF_SEGMENT_ID);
+    /* Restore the previous error callback */
+    error_context_stack = errcallback.previous;
+
+    elog(DEBUG5, "pxf_fdw: pxfBeginForeignScan ends on segment: %d", PXF_SEGMENT_ID);
 }
 
 /*
@@ -440,8 +472,8 @@ pxfIterateForeignScan(ForeignScanState *node)
 	bool		found;
 
 	/* Set up callback to identify error line number. */
-	errcallback.callback = CopyFromErrorCallback;
-	errcallback.arg = (void *) pxfsstate->cstate;
+	errcallback.callback = PxfCopyFromErrorCallback;
+	errcallback.arg = (void *) pxfsstate;
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
@@ -540,6 +572,24 @@ pxfEndForeignScan(ForeignScanState *node)
 }
 
 /*
+ * pxfBeginForeignInsert
+ *		Begin an insert operation on a foreign table, called in COPY <table> FROM <source> flow
+ */
+static void
+pxfBeginForeignInsert(ModifyTableState *mtstate,
+					  ResultRelInfo *resultRelInfo)
+{
+	/*
+	 * This would be the natural place to call external_insert_init(), but we
+	 * delay that until the first actual insert. That's because we don't want
+	 * to open the external resource if we don't end up actually inserting any
+	 * rows in this segment. In particular, we don't want to initialize the
+	 * external resource in the QD node, when all the actual insertions happen
+	 * in the segments.
+	 */
+}
+
+/*
  * pxfBeginForeignModify
  *		Begin an insert/update/delete operation on a foreign table
  */
@@ -550,24 +600,42 @@ pxfBeginForeignModify(ModifyTableState *mtstate,
 					  int subplan_index,
 					  int eflags)
 {
-	elog(DEBUG5, "pxf_fdw: pxfBeginForeignModify starts on segment: %d", PXF_SEGMENT_ID);
+	/*
+	 * This would be the natural place to call external_insert_init(), but we
+	 * delay that until the first actual insert. That's because we don't want
+	 * to open the external resource if we don't end up actually inserting any
+	 * rows in this segment. In particular, we don't want to initialize the
+	 * external resource in the QD node, when all the actual insertions happen
+	 * in the segments.
+	 */
+}
+
+/*
+ * InitForeignModify
+ * 		Initialize various structures before actually performing insertion / modification
+ * 		of data in an external system
+ */
+static PxfFdwModifyState *
+InitForeignModify(Relation relation)
+{
+	elog(DEBUG5, "pxf_fdw: InitForeignModify starts on segment: %d", PXF_SEGMENT_ID);
 
 	ForeignTable *rel;
 	Oid			foreigntableid;
 	PxfOptions *options = NULL;
 	PxfFdwModifyState *pxfmstate = NULL;
-	Relation	relation = resultRelInfo->ri_RelationDesc;
 	TupleDesc	tupDesc;
 
-	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
-		return;
+	// TODO: do we need to care about this ?
+//	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
+//		return;
 
 	foreigntableid = RelationGetRelid(relation);
 	rel = GetForeignTable(foreigntableid);
 
 	if (Gp_role == GP_ROLE_DISPATCH && rel->exec_location == FTEXECLOCATION_ALL_SEGMENTS)
 		/* master does not process any data when exec_location is all segments */
-		return;
+		return NULL;
 
 	tupDesc = RelationGetDescr(relation);
 	options = PxfGetOptions(foreigntableid);
@@ -583,9 +651,8 @@ pxfBeginForeignModify(ModifyTableState *mtstate,
 
 	InitCopyStateForModify(pxfmstate);
 
-	resultRelInfo->ri_FdwState = pxfmstate;
-
 	elog(DEBUG5, "pxf_fdw: pxfBeginForeignModify ends on segment: %d", PXF_SEGMENT_ID);
+	return pxfmstate;
 }
 
 /*
@@ -601,10 +668,15 @@ pxfExecForeignInsert(EState *estate,
 	elog(DEBUG5, "pxf_fdw: pxfExecForeignInsert starts on segment: %d", PXF_SEGMENT_ID);
 
 	PxfFdwModifyState *pxfmstate = (PxfFdwModifyState *) resultRelInfo->ri_FdwState;
-
-	/* If pxfmstate is NULL, we are in MASTER when exec_location is all segments; nothing to do */
-	if (pxfmstate == NULL)
-		return NULL;
+	if (!pxfmstate)
+	{
+		/* state has not been initialized yet, create and store it on the first call */
+		pxfmstate = InitForeignModify(resultRelInfo->ri_RelationDesc);
+		/* if initialization was a noop (ANALYZE case or execution on COORDINATOR, exit */
+		if (!pxfmstate)
+			return slot;
+		resultRelInfo->ri_FdwState = pxfmstate;
+	}
 
 	CopyState	cstate = pxfmstate->cstate;
 #if PG_VERSION_NUM < 90600
@@ -646,6 +718,21 @@ pxfExecForeignInsert(EState *estate,
 }
 
 /*
+ * pxfEndForeignInsert
+ *		Finish an insert operation on a foreign table
+ */
+static void
+pxfEndForeignInsert(EState *estate,
+					ResultRelInfo *resultRelInfo)
+{
+	elog(DEBUG5, "pxf_fdw: pxfEndForeignInsert starts on segment: %d", PXF_SEGMENT_ID);
+
+	FinishForeignModify(resultRelInfo->ri_FdwState);
+
+	elog(DEBUG5, "pxf_fdw: pxfEndForeignInsert ends on segment: %d", PXF_SEGMENT_ID);
+}
+
+/*
  * pxfEndForeignModify
  *		Finish an insert/update/delete operation on a foreign table
  */
@@ -655,8 +742,14 @@ pxfEndForeignModify(EState *estate,
 {
 	elog(DEBUG5, "pxf_fdw: pxfEndForeignModify starts on segment: %d", PXF_SEGMENT_ID);
 
-	PxfFdwModifyState *pxfmstate = (PxfFdwModifyState *) resultRelInfo->ri_FdwState;
+	FinishForeignModify(resultRelInfo->ri_FdwState);
 
+	elog(DEBUG5, "pxf_fdw: pxfEndForeignModify ends on segment: %d", PXF_SEGMENT_ID);
+}
+
+static void
+FinishForeignModify(PxfFdwModifyState *pxfmstate)
+{
 	/* If pxfmstate is NULL, we are in EXPLAIN or MASTER when exec_location is all segments; nothing to do */
 	if (pxfmstate == NULL)
 		return;
@@ -665,7 +758,6 @@ pxfEndForeignModify(EState *estate,
 	pxfmstate->cstate = NULL;
 	PxfBridgeCleanup(pxfmstate);
 
-	elog(DEBUG5, "pxf_fdw: pxfEndForeignModify ends on segment: %d", PXF_SEGMENT_ID);
 }
 
 /*
@@ -774,8 +866,7 @@ InitCopyStateForModify(PxfFdwModifyState *pxfmstate)
 	PxfBridgeExportStart(pxfmstate);
 
 	/*
-	 * Create CopyState from FDW options.  We always acquire all columns, so
-	 * as to match the expected ScanTupleSlot signature.
+	 * Create CopyState from FDW options.  We always acquire all columns to match the expected ScanTupleSlot signature.
 	 */
 	cstate = BeginCopyTo(pxfmstate->relation, copy_options);
 
@@ -827,7 +918,7 @@ InitCopyStateForModify(PxfFdwModifyState *pxfmstate)
 }
 
 /*
- * Set up CopyState for writing to an foreign table.
+ * Set up CopyState for writing to a foreign table.
  */
 static CopyState
 BeginCopyTo(Relation forrel, List *options)
@@ -857,4 +948,133 @@ BeginCopyTo(Relation forrel, List *options)
 														cstate->enc_conversion_proc);
 
 	return cstate;
+}
+
+/*
+ * PXF specific error context callback for "begin foreign scan" operation.
+ * It replaces the "COPY" term in the error message context with
+ * the "Foreign table" term and provides the name of the foreign table and its resource option
+ */
+static void
+PxfBeginScanErrorCallback(void *arg) {
+	PxfFdwScanState *pxfsstate = (PxfFdwScanState *) arg;
+	if (pxfsstate && pxfsstate->relation) {
+		if (pxfsstate->options && pxfsstate->options->resource)
+		{
+			errcontext("Foreign table %s, resource %s",
+					   RelationGetRelationName(pxfsstate->relation), pxfsstate->options->resource);
+		}
+		else
+		{
+			errcontext("Foreign table %s", RelationGetRelationName(pxfsstate->relation));
+		}
+		return;
+	}
+}
+
+/*
+ * PXF specific error context callback for "iterate foreign scan" operation.
+ * It is copied from copy.c handler for COPY FROM operation and replaces
+ * the "COPY" term in the error message context with the "Foreign table" term.
+ * It also replaces the error message form COPY stack with the one sent by PXF
+ * if it detects that PXF provided the error token in an extra column of an error row.
+ *
+ * The argument for the error context must be PxfFdwScanState.
+ */
+void
+PxfCopyFromErrorCallback(void *arg)
+{
+    PxfFdwScanState *pxfsstate = (PxfFdwScanState *) arg;
+    CopyState	cstate = pxfsstate->cstate;
+    char		curlineno_str[32];
+
+    snprintf(curlineno_str, sizeof(curlineno_str), UINT64_FORMAT,
+             cstate->cur_lineno);
+
+    if (cstate->binary)
+    {
+        /* can't usefully display the data */
+        if (cstate->cur_attname)
+            errcontext("Foreign table %s, record %s of %s, column %s",
+                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource,
+                       cstate->cur_attname);
+        else
+            errcontext("Foreign table %s, record %s of %s",
+                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource);
+    }
+    else
+    {
+        if (cstate->cur_attname && cstate->cur_attval)
+        {
+            /* error is relevant to a particular column */
+            char	   *attval;
+
+            attval = limit_printout_length(cstate->cur_attval);
+            errcontext("Foreign table %s, record %s of %s, column %s: \"%s\"",
+                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource,
+                       cstate->cur_attname, attval);
+            pfree(attval);
+        }
+        else if (cstate->cur_attname)
+        {
+            /* error is relevant to a particular column, value is NULL */
+            errcontext("Foreign table %s, record %s of %s, column %s: null input",
+                       cstate->cur_relname, curlineno_str, pxfsstate->options->resource,
+                       cstate->cur_attname);
+        }
+        else
+        {
+            /*
+             * PXF specific addition: for CSV transfer PXF communicates an error
+             * during processing by emitting an "error" line that has no values
+             * for all columns and has an additional column that contains a marker
+             * token and an actual error message in the format
+             * ",, ... ,,PXFERRMSG> <actual message>"
+             * The copy code fails to parse it with the message
+             * "extra data after last expected column" that we want to change to
+             * contain the actual error message reported by PXF
+             */
+            char *token_index = strstr(cstate->line_buf.data, PXF_ERROR_TOKEN);
+            if (token_index != NULL) {
+                /* token was found, get the actual message and set it as the main error message */
+                errmsg("%s", token_index + PXF_ERROR_TOKEN_SIZE);
+                errcontext("Foreign table %s, record %s of %s",
+                           cstate->cur_relname, curlineno_str, pxfsstate->options->resource);
+            }
+            /*
+             * Error is relevant to a particular line.
+             *
+             * If line_buf still contains the correct line, and it's already
+             * transcoded, print it. If it's still in a foreign encoding, it's
+             * quite likely that the error is precisely a failure to do
+             * encoding conversion (ie, bad data). We dare not try to convert
+             * it, and at present there's no way to regurgitate it without
+             * conversion. So we have to punt and just report the line number.
+             */
+            else if (cstate->line_buf_valid &&
+                (cstate->line_buf_converted || !cstate->need_transcoding))
+            {
+                char	   *lineval;
+
+                lineval = limit_printout_length(cstate->line_buf.data);
+                //truncateEolStr(line_buf, cstate->eol_type); <-- this is done in GP6, but not in GP7 ?
+                errcontext("Foreign table %s, record %s of %s: \"%s\"",
+                           cstate->cur_relname, curlineno_str, pxfsstate->options->resource, lineval);
+                pfree(lineval);
+            }
+            else
+            {
+                /*
+                 * Here, the line buffer is still in a foreign encoding,
+                 * and indeed it's quite likely that the error is precisely
+                 * a failure to do encoding conversion (ie, bad data).	We
+                 * dare not try to convert it, and at present there's no way
+                 * to regurgitate it without conversion.  So we have to punt
+                 * and just report the line number.
+                 */
+                errcontext("Foreign table %s, record %s of %s",
+                           cstate->cur_relname, curlineno_str, pxfsstate->options->resource);
+            }
+        }
+    }
 }

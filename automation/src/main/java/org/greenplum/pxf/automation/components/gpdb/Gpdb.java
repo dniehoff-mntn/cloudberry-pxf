@@ -1,14 +1,18 @@
 package org.greenplum.pxf.automation.components.gpdb;
 
+import com.google.common.collect.Lists;
 import org.apache.commons.lang.StringUtils;
 import org.greenplum.pxf.automation.components.common.DbSystemObject;
 import org.greenplum.pxf.automation.components.common.ShellSystemObject;
 import org.greenplum.pxf.automation.structures.tables.basic.Table;
+import org.greenplum.pxf.automation.structures.tables.pxf.ExternalTable;
 import org.greenplum.pxf.automation.utils.jsystem.report.ReportUtils;
+import org.greenplum.pxf.automation.utils.system.FDWUtils;
 import org.springframework.util.Assert;
 
 import java.io.File;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,6 +23,7 @@ public class Gpdb extends DbSystemObject {
 
 	private static final String DEFAULT_PORT = "5432";
 	private static final String GREENPLUM_DATABASE_PREFIX = "Greenplum Database ";
+	private static final String IF_NOT_EXISTS_OPTION = "IF NOT EXISTS";
 
 	private String sshUserName;
 	private String sshPassword;
@@ -48,9 +53,7 @@ public class Gpdb extends DbSystemObject {
 		 * connecting it.
 		 */
 		driver = "org.postgresql.Driver";
-		address = "jdbc:postgresql://" + getHost() + ":" + getPort() + "/template1";
-
-		connect();
+		connectToDataBase("template1");
 		version = determineVersion();
 
 		if (!checkDataBaseExists(getDb())) {
@@ -67,14 +70,17 @@ public class Gpdb extends DbSystemObject {
 			}
 		}
 
-		super.close();
-
-		address = "jdbc:postgresql://" + getHost() + ":" + getPort() + "/" + getDb();
-
-		connect();
+		connectToDataBase(getDb());
 
 		// Create the extensions if they don't exist
-		createExtension("pxf", true);
+		String extensionName = FDWUtils.useFDW ? "pxf_fdw" : "pxf";
+		createExtension(extensionName, true);
+
+		if (FDWUtils.useFDW) {
+			createTestFDW(true);
+			createSystemFDW(true);
+			createForeignServers(true);
+		}
 
 		ReportUtils.stopLevel(report);
 	}
@@ -102,22 +108,106 @@ public class Gpdb extends DbSystemObject {
 
 	/**
 	 * Copies data from source table into target table
-	 * @param source
-	 * @param target
-	 * @throws Exception
+	 * @param source source table
+	 * @param target target table
+	 * @throws Exception if the operation fails
 	 */
-    public void copyData(Table source, Table target) throws Exception {
+	public void copyData(Table source, Table target) throws Exception {
 
+		copyData(source, target, false);
+	}
 
-        runQuery("INSERT INTO " + target.getName() + " SELECT * FROM "
-                + source.getName());
-    }
+	/**
+	 * Copies data from source table into target table
+	 * @param sourceName name of the source table
+	 * @param target target table
+	 * @throws Exception if the operation fails
+	 */
+	public void copyData(String sourceName, Table target) throws Exception {
+
+		copyData(sourceName, target, false);
+	}
+
+	/**
+	 * Copies data from source table into target table
+	 * @param sourceName name of the source table
+	 * @param target target table
+	 * @param columns columns to select from the source table, if null then all columns will be selected
+	 * @throws Exception if the operation fails
+	 */
+	public void copyData(String sourceName, Table target, String[] columns) throws Exception {
+
+		copyData(sourceName, target, columns,false, null);
+	}
+
+	/**
+	 * Copies data from source table into target table
+	 * @param sourceName name of the source table
+	 * @param target target table
+	 * @param columns columns to select from the source table, if null then all columns will be selected
+	 * @param context extra context to add before the SQL query
+	 * @throws Exception if the operation fails
+	 */
+	public void copyData(String sourceName, Table target, String[] columns, String context) throws Exception {
+
+		copyData(sourceName, target, columns, false, context);
+	}
+
+	/**
+	 * Copies data from source table into target table
+	 * @param source source table
+	 * @param target target table
+	 * @param ignoreFail whether to ignore any failures
+	 * @throws Exception if the operation fails
+	 */
+	public void copyData(Table source, Table target, boolean ignoreFail) throws Exception {
+		copyData(source.getName(), target, ignoreFail);
+	}
+
+	/**
+	 * Copies data from source table into target table
+	 * @param sourceName name of the source table
+	 * @param target target table
+	 * @param ignoreFail whether to ignore any failures
+	 * @throws Exception if the operation fails
+	 */
+	public void copyData(String sourceName, Table target, boolean ignoreFail) throws Exception {
+		copyData(sourceName, target, null, ignoreFail, null);
+	}
+
+	/**
+	 * Copies data from the source table into the target table with a possibility of selecting specific columns.
+	 * If the columns are specified, the schema of the target table should correspond to the projection achieved
+	 * by specifying the columns. If the columns are not provided, all columns are selected from the source table.
+	 * @param sourceName name of the source table
+	 * @param target target table
+	 * @param columns columns to select from the source table, if null then all columns will be selected
+	 * @param ignoreFail whether to ignore any failures
+	 * @param context extra context to add before the SQL query
+	 * @throws Exception if the operation fails
+	 */
+	public void copyData(String sourceName, Table target, String[] columns, boolean ignoreFail, String context) throws Exception {
+		String columnList = (columns == null || columns.length == 0) ? "*" : String.join(",", columns);
+		String query = String.format("%sINSERT INTO %s SELECT %s FROM %s",
+				StringUtils.isBlank(context) ? "" : context + "; " ,target.getName(), columnList, sourceName);
+		if (target instanceof ExternalTable) {
+			runQueryInsertIntoExternalTable(query);
+		} else {
+			runQuery(query, ignoreFail, false);
+		}
+	}
+
+	public void connectToDataBase(String dbName) throws Exception {
+		super.close();
+		address = "jdbc:postgresql://" + getHost() + ":" + getPort() + "/" + dbName;
+		connect();
+	}
 
 	@Override
 	public void createDataBase(String schemaName, boolean ignoreFail) throws Exception {
 
 		runQuery("CREATE DATABASE " + schemaName, ignoreFail, false);
-		runQuery("ALTER DATABASE " + schemaName + " SET bytea_output TO 'escape'", ignoreFail, false);
+		setDatabaseLevelGUCsForTesting(schemaName, ignoreFail);
 	}
 
 	@Override
@@ -134,11 +224,76 @@ public class Gpdb extends DbSystemObject {
 		}
 
 		runQuery(createStatement, ignoreFail, false);
+		setDatabaseLevelGUCsForTesting(schemaName, ignoreFail);
+	}
+
+	private void setDatabaseLevelGUCsForTesting(String schemaName, boolean ignoreFail) throws Exception {
+
 		runQuery("ALTER DATABASE " + schemaName + " SET bytea_output TO 'escape'", ignoreFail, false);
+
+		// This GUC has a default value of 1 in PG12 (GPDB7) and thus the columns of type REAL display one digit extra.
+		// So to keep the behavior consistent with previous version, we're setting this GUC value to 0.
+		if (version >= 7) {
+			runQuery("ALTER DATABASE " + schemaName + " SET extra_float_digits=0", ignoreFail, false);
+		}
 	}
 
 	private void createExtension(String extensionName, boolean ignoreFail) throws Exception {
 		runQuery("CREATE EXTENSION IF NOT EXISTS " + extensionName, ignoreFail, false);
+	}
+
+	private void createTestFDW(boolean ignoreFail) throws Exception {
+		runQuery("DROP FOREIGN DATA WRAPPER IF EXISTS test_pxf_fdw CASCADE", ignoreFail, false);
+		runQuery("CREATE FOREIGN DATA WRAPPER test_pxf_fdw HANDLER pxf_fdw_handler " +
+				 "VALIDATOR pxf_fdw_validator OPTIONS (protocol 'test', mpp_execute 'all segments')",
+				ignoreFail, false);
+	}
+
+	private void createSystemFDW(boolean ignoreFail) throws Exception {
+		runQuery("DROP FOREIGN DATA WRAPPER IF EXISTS system_pxf_fdw CASCADE", ignoreFail, false);
+		runQuery("CREATE FOREIGN DATA WRAPPER system_pxf_fdw HANDLER pxf_fdw_handler " +
+				"VALIDATOR pxf_fdw_validator OPTIONS (protocol 'system', mpp_execute 'all segments')",
+				ignoreFail, false);
+	}
+
+	private void createForeignServers(boolean ignoreFail) throws Exception {
+		List<String> servers = Lists.newArrayList(
+		"default_hdfs",
+		"default_hive",
+		"db-hive_jdbc", // Needed for JdbcHiveTest
+		"default_hbase",
+		"default_jdbc", // Needed for JdbcHiveTest and other JdbcTest which refers to the default server.
+		"database_jdbc",
+		"db-session-params_jdbc",
+		"default_file",
+		"default_s3",
+		"default_gs",
+		"default_abfss",
+		"default_wasbs",
+		"s3_s3",
+		"s3-invalid_s3",
+		"s3-non-existent_s3",
+		"hdfs-non-secure_hdfs",
+		"hdfs-secure_hdfs",
+		"hdfs-ipa_hdfs",
+		"default_test",
+		"default_system");
+
+		// version below GP7 do not have IF EXISTS / IF NOT EXISTS command options for foreign SERVER creation
+		String option = (version < 7) ? "" : IF_NOT_EXISTS_OPTION;
+		for (String server : servers) {
+			String foreignServerName = server.replace("-", "_");
+			if (version < 7 && serverExists(foreignServerName)) {
+				continue;
+			}
+
+			String pxfServerName = server.substring(0,server.lastIndexOf("_")); // strip protocol at the end
+			String fdwName = server.substring(server.lastIndexOf("_") + 1) + "_pxf_fdw"; // strip protocol at the end
+			runQuery(String.format("CREATE SERVER %s %s FOREIGN DATA WRAPPER %s OPTIONS(config '%s')",
+					option, foreignServerName, fdwName, pxfServerName), ignoreFail, false);
+			runQuery(String.format("CREATE USER MAPPING %s FOR CURRENT_USER SERVER %s", option, foreignServerName),
+					ignoreFail, false);
+		}
 	}
 
 	@Override
@@ -236,29 +391,20 @@ public class Gpdb extends DbSystemObject {
 		}
 
 		StringBuilder dataStringBuilder = new StringBuilder();
-
 		List<List<String>> data = from.getData();
-
 		for (int i = 0; i < data.size(); i++) {
-
 			List<String> row = data.get(i);
-
 			for (int j = 0; j < row.size(); j++) {
-
 				dataStringBuilder.append(row.get(j));
-
 				if (j != row.size() - 1) {
 					dataStringBuilder.append(delimeter);
 				}
 			}
-
 			dataStringBuilder.append("\n");
-
 		}
-
 		dataStringBuilder.append("\\.");
 
-		copy(to.getName(), "STDIN", dataStringBuilder.toString(), delim, null, csv);
+		copyWithOptionalCTAS("STDIN", to, dataStringBuilder.toString(), delim, null, csv);
 	}
 
 	/**
@@ -273,7 +419,21 @@ public class Gpdb extends DbSystemObject {
 	public void copyFromFile(Table to, File path, String delim, boolean csv) throws Exception {
 		String from = "'" + path.getAbsolutePath() + "'";
 		copyLocalFileToRemoteGpdb(from);
-		copy(to.getName(), from, null, delim, null, csv);
+		copyWithOptionalCTAS(from, to, null, delim, null, csv);
+	}
+
+	private void copyWithOptionalCTAS(String from, Table to, String dataToCopy, String delim, String nullChar, boolean csv) throws Exception {
+		// COPY TO <foreign table> is not supported in PXF FDW with GP6, so we will have to do a workaround by
+		// creating a native table, copying data from the file into it and then performing a CTAS into the foreign table
+		if (FDWUtils.useFDW && getVersion() < 7) {
+			Table nativeTable = createTableLike(to.getName() + "_native", to);
+			// copy data into the native table
+			copy(nativeTable.getName(), from, dataToCopy, delim, null, csv);
+			// CTAS into the foreign table
+			copyData(nativeTable, to, true);
+		} else {
+			copy(to.getName(), from, dataToCopy, delim, null, csv);
+		}
 	}
 
 	private void copyLocalFileToRemoteGpdb(String from) throws Exception {
@@ -413,6 +573,45 @@ public class Gpdb extends DbSystemObject {
 		int versionInt = Integer.valueOf(versionStr);
 		ReportUtils.report(report, getClass(), "Determined Greenplum version: " + versionInt);
 		return versionInt;
+	}
+
+	private boolean serverExists(String name) throws SQLException {
+		/* If in the future we want to check the existence of both the foreign server and the user mapping
+		we can use the following query
+		SELECT COUNT(*) FROM pg_catalog.pg_user_mapping um
+		LEFT JOIN pg_catalog.pg_foreign_server fs ON um.umserver = fs.oid
+		LEFT JOIN pg_catalog.pg_roles r ON um.umuser = r.oid
+		WHERE r.rolname = session_user::text AND fs.srvname = '%s';
+		 */
+		String query = String.format("SELECT COUNT(*) FROM pg_catalog.pg_foreign_server WHERE srvname = '%s'", name);
+		ReportUtils.report(report, getClass(), "Determining if foreign server exists - query: " + query);
+
+		ResultSet res = stmt.executeQuery(query);
+		res.next();
+		int count = res.getInt(1);
+		ReportUtils.report(report, getClass(), "Retrieved from Greenplum: [" + count + "] servers");
+		return count > 0;
+	}
+
+	/**
+	 * Create a table like the other table, only schema / distribution is copied, not the data.
+	 * @param name name of table to create
+	 * @param source source table
+	 * @return table that got created
+	 * @throws Exception if the operation fails
+	 */
+	private Table createTableLike(String name, Table source) throws Exception {
+		Table table = new Table(name, source.getFields());
+		String[] distributionFields = source.getDistributionFields();
+		if (distributionFields != null && distributionFields.length > 0) {
+			table.setDistributionFields(distributionFields);
+		} else {
+			// set distribution field as the first one so that PSQL does not issue a warning
+			// extract the name of the first table field and type, split off the type that follows the name after whitespace
+			table.setDistributionFields(new String[]{table.getFields()[0].split("\\s+")[0]});
+		}
+		createTableAndVerify(table);
+		return table;
 	}
 
 }

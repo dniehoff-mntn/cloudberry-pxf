@@ -1,0 +1,23 @@
+-- start_ignore
+-- end_ignore
+-- @description query01 for PXF test for cloud access where no server and no credentials are specified
+--
+-- start_matchsubs
+--
+-- # create a match/subs
+--
+-- m/PXF server error.*(com.amazonaws.AmazonClientException: No AWS Credentials provided by BasicAWSCredentialsProvider).*/
+-- s/PXF server error.*/PXF server error : com.amazonaws.AmazonClientException: No AWS Credentials provided by BasicAWSCredentialsProvider/
+--
+-- m/DETAIL/
+-- s/DETAIL/CONTEXT/
+--
+-- m/CONTEXT:.*line.*/
+-- s/line \d* of //g
+--
+-- m/, file.*pxf_automation_data/
+-- s/, file.*pxf_automation_data.*/pxf_automation_data/
+--
+-- end_matchsubs
+
+SELECT *  FROM cloudaccess_no_server_no_credentials;

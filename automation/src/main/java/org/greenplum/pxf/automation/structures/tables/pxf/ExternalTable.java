@@ -4,7 +4,10 @@ import org.greenplum.pxf.automation.structures.tables.basic.Table;
 import org.greenplum.pxf.automation.utils.system.ProtocolEnum;
 import org.greenplum.pxf.automation.utils.system.ProtocolUtils;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Represent GPDB -> PXF external table.
@@ -29,6 +32,8 @@ public abstract class ExternalTable extends Table {
 
     private String formatter;
 
+    private List<String> formatterOptions = new ArrayList<>();
+
     private String delimiter;
 
     private String escape;
@@ -50,6 +55,8 @@ public abstract class ExternalTable extends Table {
     private String encoding;
 
     private String externalDataSchema;
+
+    private boolean formatterMixedCase = false; // whether to mangle FORMATTER word into mixed case for testing
 
     public ExternalTable(String name, String[] fields, String path,
                          String format) {
@@ -129,6 +136,8 @@ public abstract class ExternalTable extends Table {
         }
 
         if (getDataSchema() != null) {
+            // even though the new option name is DATA_SCHEMA, we can still use DATA-SCHEMA for an external table
+            // to test backward compatibility
             appendParameter(sb, "DATA-SCHEMA=" + getDataSchema());
         }
 
@@ -171,26 +180,32 @@ public abstract class ExternalTable extends Table {
 
     @Override
     public String constructCreateStmt() {
-        String createStatment = "";
+        String createStatement = "";
 
-        createStatment += createHeader();
-        createStatment += createFields();
-        createStatment += createLocation();
+        createStatement += createHeader();
+        createStatement += createFields();
+        createStatement += createLocation();
 
         if (getFormat() != null) {
-            createStatment += " FORMAT '" + getFormat() + "'";
+            createStatement += " FORMAT '" + getFormat() + "'";
 
         }
 
         if (getFormatter() != null) {
-            createStatment += " (formatter='" + getFormatter() + "')";
+            String formatterOption = isFormatterMixedCase() ? "FoRmAtTeR" : "formatter";
+            createStatement += String.format(" (%s='%s'", formatterOption, getFormatter());
+            if (formatterOptions.size() > 0) {
+                createStatement += ", ";
+                createStatement += formatterOptions.stream().collect(Collectors.joining(", "));
+            }
+            createStatement += ")";
         }
 
         boolean hasDelimiterOrEscapeOrNewLine =
                 getDelimiter() != null || getEscape() != null || getNewLine() != null;
 
         if (hasDelimiterOrEscapeOrNewLine) {
-            createStatment += " (";
+            createStatement += " (";
         }
 
         if (getDelimiter() != null) {
@@ -200,7 +215,7 @@ public abstract class ExternalTable extends Table {
             if (!parsedDelimiter.startsWith("E")) {
                 parsedDelimiter = "'" + parsedDelimiter + "'";
             }
-            createStatment += " DELIMITER " + parsedDelimiter ;
+            createStatement += " DELIMITER " + parsedDelimiter ;
         }
 
         if (getEscape() != null) {
@@ -210,34 +225,35 @@ public abstract class ExternalTable extends Table {
             if (!parsedEscapeCharacter.startsWith("E")) {
                 parsedEscapeCharacter = "'" + parsedEscapeCharacter + "'";
             }
-            createStatment += " ESCAPE " + parsedEscapeCharacter;
+            createStatement += " ESCAPE " + parsedEscapeCharacter;
         }
 
         if (getNewLine() != null) {
 
             String newLineCharacter = getNewLine();
-            createStatment += " NEWLINE '" + newLineCharacter + "'";
+            createStatement += " NEWLINE '" + newLineCharacter + "'";
         }
 
         if (hasDelimiterOrEscapeOrNewLine) {
-            createStatment += ")";
+            createStatement += ")";
         }
 
         if (getEncoding() != null) {
-            createStatment += " ENCODING '" + getEncoding() + "'";
+            createStatement += " ENCODING '" + getEncoding() + "'";
         }
 
         if (getErrorTable() != null) {
-            createStatment += " LOG ERRORS";
+            createStatement += " LOG ERRORS";
         }
 
         if (getSegmentRejectLimit() > 0) {
-            createStatment += " SEGMENT REJECT LIMIT "
+            createStatement += " SEGMENT REJECT LIMIT "
                     + getSegmentRejectLimit() + " "
                     + getSegmentRejectLimitType();
         }
 
-        return createStatment;
+        createStatement += distribution();
+        return createStatement;
     }
 
     public String getHost() {
@@ -397,7 +413,16 @@ public abstract class ExternalTable extends Table {
         }
     }
 
-    private String[] getUserParameters() {
+    public void addUserParameter(String userParameter) {
+        if (userParameters == null) {
+            userParameters = new String[] {userParameter};
+        } else {
+            userParameters = Arrays.copyOf(userParameters, userParameters.length + 1);
+            userParameters[userParameters.length - 1] = userParameter;
+        }
+    }
+
+    protected String[] getUserParameters() {
         return userParameters;
     }
 
@@ -415,5 +440,23 @@ public abstract class ExternalTable extends Table {
 
     public void setExternalDataSchema(String externalDataSchema) {
         this.externalDataSchema = externalDataSchema;
+    }
+
+    public void addFormatterOption(String formatterOption) {
+        this.formatterOptions.add(formatterOption);
+    }
+
+    public void setFormatterOptions(String[] formatterOptions) {
+        for (String option : formatterOptions) {
+            addFormatterOption(option);
+        }
+    }
+
+    public boolean isFormatterMixedCase() {
+        return formatterMixedCase;
+    }
+
+    public void setFormatterMixedCase(boolean formatterMixedCase) {
+        this.formatterMixedCase = formatterMixedCase;
     }
 }

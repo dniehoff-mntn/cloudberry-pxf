@@ -25,8 +25,8 @@ The configuration information for a PXF server resides in one or more `<connecto
 PXF provides a template configuration file for each connector.  These server template configuration files are located in the `<PXF_INSTALL_DIR>/templates/` directory after you install PXF:
 
 ```
-gpadmin@gpmaster$ ls <PXF_INSTALL_DIR>/templates
-adl-site.xml   hbase-site.xml  jdbc-site.xml    pxf-site.xml    yarn-site.xml
+gpadmin@coordinator$ ls <PXF_INSTALL_DIR>/templates
+abfss-site.xml   hbase-site.xml  jdbc-site.xml    pxf-site.xml    yarn-site.xml
 core-site.xml  hdfs-site.xml   mapred-site.xml  s3-site.xml
 gs-site.xml    hive-site.xml   minio-site.xml   wasbs-site.xml
 ```
@@ -88,15 +88,19 @@ To configure a PXF server, refer to the connector configuration topic:
 
 ## <a id="pxf-site"></a>About the pxf-site.xml Configuration File
 
-PXF includes a template file named `pxf-site.xml` for PXF-specific configuration parameters. You can use the `pxf-site.xml` template file to specify Kerberos and/or user impersonation settings for server configurations, or to specify a base directory for file access.
+PXF includes a template file named `pxf-site.xml` for PXF-specific configuration parameters. You can use the `pxf-site.xml` template file to configure:
+
+- Kerberos and/or user impersonation settings for server configurations
+- a base directory for file access
+- the action of PXF when it detects an overflow condition while writing numeric ORC or Parquet data
 
 <div class="note"><b>Note:</b> The Kerberos and user impersonation settings in this file may apply only to Hadoop and JDBC server configurations; they do not apply to file system or object store server configurations.</div>
 
 You configure properties in the `pxf-site.xml` file for a PXF server when one or more of the following conditions hold:
 
 - The remote Hadoop system utilizes Kerberos authentication.
-- You want to enable/disable user impersonation on the remote Hadoop or external database system.
-- You want to enable/disable Kerberos constrained delegation for a Hadoop PXF server.
+- You want to activate/deactivate user impersonation on the remote Hadoop or external database system.
+- You want to activate/deactivate Kerberos constrained delegation for a Hadoop PXF server.
 - You will access a network file system with the server configuration.
 - You will access a remote Hadoop or object store file system with the server configuration, and you want to allow a user to access only a specific directory and subdirectories.
 
@@ -106,12 +110,15 @@ You configure properties in the `pxf-site.xml` file for a PXF server when one or
 |----------------|--------------------------------------------|---------------|
 | pxf.service.kerberos.principal | The Kerberos principal name. | gpadmin/\_HOST@EXAMPLE.COM |
 | pxf.service.kerberos.keytab | The file system path to the Kerberos keytab file. | $PXF_BASE/keytabs/pxf.service.keytab |
-| pxf.service.kerberos.constrained-delegation | Enables/disables [Kerberos constrained delegation](pxf_kerbhdfs.html#kcd). **Note:** This property is applicable only to Hadoop PXF server configurations, it is not applicable to JDBC PXF servers. | false |
-| pxf.service.user.impersonation | Enables/disables user impersonation when connecting to the remote system. | If the `pxf.service.user.impersonation` property is missing from `pxf-site.xml`, the default is `true` (enabled) for PXF Hadoop servers and `false` (disabled) for JDBC servers. |
+| pxf.service.kerberos.constrained-delegation | Activates/deactivates [Kerberos constrained delegation](pxf_kerbhdfs.html#kcd). **Note:** This property is applicable only to Hadoop PXF server configurations, it is not applicable to JDBC PXF servers. | false |
+| pxf.service.kerberos.ticket-renew-window| The minimum elapsed lifespan (as a percentage) after which PXF attempts to renew/refresh a Kerberos ticket. Value range is from 0 (PXF generates a new ticket for all requests) to 1 (PXF renews after full ticket lifespan). | 0.8 (80%) |
+| pxf.service.user.impersonation | Activates/deactivates user impersonation when connecting to the remote system. | If the `pxf.service.user.impersonation` property is missing from `pxf-site.xml`, the default is `true` (activated) for PXF Hadoop servers and `false` (deactivated) for JDBC servers. |
 | pxf.service.user.name | The login user for the remote system. | This property is commented out by default. When the property is unset, the default value is the operating system user that starts the pxf process, typically `gpadmin`. When the property is set, the default value depends on the user impersonation setting and, if you are accessing Hadoop, whether or not you are accessing a Kerberos-secured cluster; see the [Use Cases and Configuration Scenarios](pxfuserimpers.html#pxf_cfg_scenarios) section in the *Configuring the Hadoop User, User Impersonation, and Proxying* topic. |
 | pxf.fs.basePath | Identifies the base path or share point on the remote file system. This property is applicable when the server configuration is used with a profile that accesses a file. | None; this property is commented out by default. |
 | pxf.ppd.hive<sup>1</sup> | Specifies whether or not predicate pushdown is enabled for queries on external tables that specify the `hive`, `hive:rc`, or `hive:orc` profiles. | True; predicate pushdown is enabled. |
 | pxf.sasl.connection.retries | Specifies the maximum number of times that PXF retries a SASL connection request after a refused connection returns a `GSS initiate failed` error. | 5 |
+| pxf.orc.write.decimal.overflow | Specifies how PXF handles numeric data that exceeds the maximum precision of 38 and [overflows](hdfs_orc.html#overflow) when writing to an ORC file. Valid values are: round, error, or ignore | round |
+| pxf.parquet.write.decimal.overflow | Specifies how PXF handles numeric data that exceeds the maximum precision of 38 and [overflows](hdfs_parquet.html#overflow) when writing to a Parquet file. Valid values are: round, error, or ignore | round |
 
 </br><sup>1</sup>&nbsp;Should you need to, you can override this setting on a per-table basis by specifying the `&PPD=<boolean>` option in the `LOCATION` clause when you create the external table.
 

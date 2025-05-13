@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-if [[ -z ${GCR_PROJECT} ]]; then
-    echo "Please set GCR_PROJECT variable to the name of your Google Container Registry project"
-    exit 1
-fi
+# if [[ -z ${GCR_PROJECT} ]]; then
+#   echo "Please set GCR_PROJECT variable to the name of your Google Container Registry project"
+#   exit 1
+# fi
 
 docker run --rm -it \
   -p 5432:5432 \
@@ -15,6 +15,6 @@ docker run --rm -it \
   -p 9090:9090 \
   -p 50070:50070 \
   -w /home/gpadmin/workspace \
-  -v ~/workspace/pxf:/home/gpadmin/workspace/pxf \
-  gcr.io/${GCR_PROJECT}/gpdb-pxf-dev/gpdb6-centos7-test-pxf-hdp2:latest /bin/bash -c \
+  -v ~/workspace/cloudberry-pxf:/home/gpadmin/workspace/pxf \
+  cbdb-1.6.0:rockylinux9 /bin/bash -c \
   "/home/gpadmin/workspace/pxf/dev/bootstrap.bash && su - gpadmin"

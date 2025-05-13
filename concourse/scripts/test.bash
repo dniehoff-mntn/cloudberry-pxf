@@ -25,9 +25,6 @@ export JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF8
 export HADOOP_HEAPSIZE=512
 export YARN_HEAPSIZE=512
 export GPHD_ROOT=/singlecluster
-if [[ ${HADOOP_CLIENT} == MAPR ]]; then
-	export GPHD_ROOT=/opt/mapr
-fi
 export PGPORT=${PGPORT:-5432}
 
 PXF_GIT_URL="https://github.com/greenplum-db/pxf.git"
@@ -70,65 +67,6 @@ function run_pg_regress() {
 	su gpadmin -c ~gpadmin/run_pxf_automation_test.sh
 }
 
-function run_pxf_automation() {
-	# Let's make sure that automation/singlecluster directories are writeable
-	chmod a+w pxf_src/automation /singlecluster || true
-	find pxf_src/automation/tinc* -type d -exec chmod a+w {} \;
-
-	local extension_name="pxf"
-	if [[ ${USE_FDW} == "true" ]]; then
-		extension_name="pxf_fdw"
-	fi
-
-	#TODO: remove once exttable tests with GP7 are set
-	if [[ ${GROUP} == fdw_gpdb_schedule ]]; then
-		extension_name="pxf_fdw"
-	fi
-
-	su gpadmin -c "
-		source '${GPHOME}/greenplum_path.sh' &&
-		psql -p ${PGPORT} -d template1 -c 'CREATE EXTENSION ${extension_name}'
-	"
-	# prepare certification output directory
-	mkdir -p certification
-	chmod a+w certification
-
-	cat > ~gpadmin/run_pxf_automation_test.sh <<-EOF
-		#!/usr/bin/env bash
-		set -exo pipefail
-
-		source ~gpadmin/.pxfrc
-
-		export PATH=\$PATH:${GPHD_ROOT}/bin
-		export GPHD_ROOT=${GPHD_ROOT}
-		export PXF_HOME=${PXF_HOME}
-		export PGPORT=${PGPORT}
-		export USE_FDW=${USE_FDW}
-
-		cd pxf_src/automation
-		time make GROUP=${GROUP} test
-
-		# if the test is successful, create certification file
-		gpdb_build_from_sql=\$(psql -c 'select version()' | grep Greenplum | cut -d ' ' -f 6,8)
-		gpdb_build_clean=\${gpdb_build_from_sql%)}
-		pxf_version=\$(< ${PXF_HOME}/version)
-		echo "GPDB-\${gpdb_build_clean/ commit:/-}-PXF-\${pxf_version}" > "${PWD}/certification/certification.txt"
-		echo
-		echo '****************************************************************************************************'
-		echo "Wrote certification : \$(< ${PWD}/certification/certification.txt)"
-		echo '****************************************************************************************************'
-	EOF
-
-	chown gpadmin:gpadmin ~gpadmin/run_pxf_automation_test.sh
-	chmod a+x ~gpadmin/run_pxf_automation_test.sh
-
-	if [[ ${ACCEPTANCE} == true ]]; then
-		echo 'Acceptance test pipeline'
-		exit 1
-	fi
-
-	su gpadmin -c ~gpadmin/run_pxf_automation_test.sh
-}
 
 function generate_extras_fat_jar() {
 	mkdir -p /tmp/fatjar
@@ -137,21 +75,6 @@ function generate_extras_fat_jar() {
 		jar -cf "/tmp/pxf-extras-1.0.0.jar" .
 		chown -R gpadmin:gpadmin "/tmp/pxf-extras-1.0.0.jar"
 	popd
-}
-
-function configure_mapr_dependencies() {
-	# Copy mapr specific jars to $BASE_DIR/lib
-	HADOOP_COMMON=/opt/mapr/hadoop/hadoop-2.7.0/share/hadoop/common
-	cp "${HADOOP_COMMON}/lib/maprfs-5.2.2-mapr.jar" \
-		"${HADOOP_COMMON}/lib/hadoop-auth-2.7.0-mapr-1707.jar" \
-		"${HADOOP_COMMON}/hadoop-common-2.7.0-mapr-1707.jar" "${BASE_DIR}/lib"
-	# Copy *-site.xml files
-	cp /opt/mapr/hadoop/hadoop-2.7.0/etc/hadoop/*-site.xml "${BASE_DIR}/servers/default"
-	# Copy mapred-site.xml for recursive hdfs directories test
-	# We need to do this step after PXF Server init
-	cp "${PXF_HOME}/templates/mapred-site.xml" "${BASE_DIR}/servers/default/recursive-site.xml"
-	# Set mapr port to 7222 in default.xml (sut)
-	sed -i 's|<port>8020</port>|<port>7222</port>|' pxf_src/automation/src/test/resources/sut/default.xml
 }
 
 function setup_hadoop() {
@@ -165,32 +88,6 @@ function setup_hadoop() {
 		adjust_for_hadoop3 "${hdfsrepo}"
 	fi
 	start_hadoop_services "${hdfsrepo}"
-}
-
-function configure_sut() {
-	[[ -d /tmp/build/ ]] && AMBARI_DIR=$(find /tmp/build/ -name ambari_env_files)
-	if [[ -n $AMBARI_DIR ]]; then
-		REALM=$(< "$AMBARI_DIR"/REALM)
-		HADOOP_IP=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-1 | awk '{print $1}')
-		HADOOP_USER=$(< "$AMBARI_DIR"/HADOOP_USER)
-		HBASE_IP=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-3 | awk '{print $1}')
-		HIVE_IP=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-2 | awk '{print $1}')
-		HIVE_HOSTNAME=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-2 | awk '{print $2}')
-		KERBERIZED_HADOOP_URI="hive/${HIVE_HOSTNAME}.c.${GOOGLE_PROJECT_ID}.internal@${REALM};saslQop=auth" # quoted because of semicolon
-		# Add ambari hostfile to /etc/hosts
-		sudo tee --append /etc/hosts < "$AMBARI_DIR"/etc_hostfile
-		sudo cp "$AMBARI_DIR"/krb5.conf /etc/krb5.conf
-		# Replace host, principal, and root path values in the SUT file
-		sed -i \
-			-e "/<hdfs>/,/<\/hdfs/ s|<host>localhost</host>|<host>${HADOOP_IP}</host>|g" \
-			-e "/<hive>/,/<\/hive/ s|<host>localhost</host>|<host>${HIVE_IP}</host>|g" \
-			-e "/<hbase>/,/<\/hbase/ s|<host>localhost</host>|<host>${HBASE_IP}</host>|g" \
-			-e "s|</hdfs>|<hadoopRoot>$AMBARI_DIR</hadoopRoot></hdfs>|g" \
-			-e "s|</hbase>|<hbaseRoot>$AMBARI_DIR</hbaseRoot></hbase>|g" \
-			-e "s|</cluster>|<hiveBaseHdfsDirectory>/warehouse/tablespace/managed/hive/</hiveBaseHdfsDirectory><testKerberosPrincipal>${HADOOP_USER}@${REALM}</testKerberosPrincipal></cluster>|g" \
-			-e "s|</hive>|<kerberosPrincipal>${KERBERIZED_HADOOP_URI}</kerberosPrincipal><userName>hive</userName></hive>|g" \
-			pxf_src/automation/src/test/resources/sut/default.xml
-	fi
 }
 
 function adjust_automation_code() {
@@ -225,11 +122,6 @@ function _main() {
 	# Ping is called by gpinitsystem, which must be run by gpadmin
 	chmod u+s /bin/ping
 
-	if [[ ${HADOOP_CLIENT} == MAPR ]]; then
-		# start mapr services before installing GPDB
-		/root/init-script
-	fi
-
 	# Install GPDB
 	if [[ -d bin_gpdb ]]; then
 		# forward compatibility pipeline works with Greenplum binary tarballs, not RPMs
@@ -238,12 +130,6 @@ function _main() {
 	else
 		install_gpdb_package
 	fi
-
-HEADER_FILE_GP7=pxf_gp7_headerfile
-if [[ ${GP_VER} -ge 7 ]]; then
-  mkdir ${GPHOME}/include/postgresql/server/extension/gp_exttable_fdw
-  cp ${HEADER_FILE_GP7}/extaccess.h  ${GPHOME}/include/postgresql/server/extension/gp_exttable_fdw
-fi
 
 	# Install PXF
 	if [[ -d pxf_package ]]; then
@@ -254,19 +140,17 @@ fi
 	fi
 
 	# Certification jobs might install non-latest PXF, make sure automation code corresponds to what is installed
-	if [[ -f ${PXF_HOME}/commit.sha ]]; then
+	if [[ -f ${PXF_HOME}/commit.sha ]] && [[ ${ADJUST_AUTOMATION} != false ]]; then
 		adjust_automation_code
 	else
 		echo "WARNING: no commit.sha file is found in PXF_HOME=${PXF_HOME}"
 	fi
 
-	if [[ ${HADOOP_CLIENT} != MAPR ]]; then
-		inflate_singlecluster
-		if [[ ${HADOOP_CLIENT} != HDP_KERBEROS && -z ${PROTOCOL} ]]; then
-			# Setup Hadoop before creating GPDB cluster to use system python for yum install
-			# Must be after installing GPDB to transfer hbase jar
-			setup_hadoop "${GPHD_ROOT}"
-		fi
+	inflate_singlecluster
+	if [[ ${HADOOP_CLIENT} != HDP_KERBEROS && -z ${PROTOCOL} ]]; then
+		# Setup Hadoop before creating GPDB cluster to use system python for yum install
+		# Must be after installing GPDB to transfer hbase jar
+		setup_hadoop "${GPHD_ROOT}"
 	fi
 
 	# initialize GPDB as gpadmin user
@@ -291,21 +175,17 @@ fi
 			echo "${GOOGLE_CREDENTIALS}" > /tmp/gsc-ci-service-account.key.json
 			[[ ${PG_REGRESS} == true ]] && setup_gs_for_pg_regress
 			;;
-		adl)
-			echo 'Using ADL protocol'
-			[[ ${PG_REGRESS} == true ]] && setup_adl_for_pg_regress
+		abfss)
+			echo 'Using ABFSS protocol'
+			[[ ${PG_REGRESS} == true ]] && setup_abfss_for_pg_regress
 			;;
 		wasbs)
 			echo 'Using WASBS protocol'
 			[[ ${PG_REGRESS} == true ]] && setup_wasbs_for_pg_regress
 			;;
 		*) # no protocol, presumably
-			if [[ ${HADOOP_CLIENT} == MAPR ]]; then
-				configure_mapr_dependencies
-			else
-				configure_pxf_default_server
-				configure_pxf_s3_server
-			fi
+			configure_pxf_default_server
+			configure_pxf_s3_server
 			;;
 	esac
 
@@ -314,16 +194,7 @@ fi
 	# Create fat jar for automation
 	generate_extras_fat_jar
 
-	configure_sut
-
 	inflate_dependencies
-
-	# To run Tinc against GP7 we need to modify PYTHONPATH in $GPHOME/greenplum_path.sh since Tinc calls that script
-	# we will set PYTHONPATH to point to the set of python libs compiled with Python2 for GP6
-	if [[ ${GP_VER} == 7 ]]; then
-	  local gp6_python_libs=~gpadmin/python
-	  echo "export PYTHONPATH=${gp6_python_libs}" >> /usr/local/greenplum-db/greenplum_path.sh
-	fi
 
 	ln -s "${PWD}/pxf_src" ~gpadmin/pxf_src
 
@@ -331,6 +202,8 @@ fi
 	if [[ -n ${GROUP} ]]; then
 		if [[ $PG_REGRESS == true ]]; then
 			run_pg_regress
+		elif [[ "${GROUP}" == "load" ]]; then
+			run_load_test
 		else
 			run_pxf_automation
 		fi

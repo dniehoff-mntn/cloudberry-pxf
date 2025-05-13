@@ -1,23 +1,3 @@
-Cloudberry Database community welcomes contributions from anyone, new and
-experienced! We appreciate your interest in contributing. This guide will help
-you get started with the contribution.
-
-## Code of Conduct
-
-Everyone who participates in Cloudberry Database, either as a user or a
-contributor, is obliged to follow our community [Code of
-Conduct](./CODE_OF_CONDUCT.md). Every violation against it will be reviewed
-and investigated and will result in a response that is deemed necessary and
-appropriate to the circumstances. The moderator team is obligated to maintain
-confidentiality regarding the reporter of an incident.
-
-Some behaviors that contribute to creating a positive environment include:
-
-* Use welcoming and inclusive language.
-* Respect differing viewpoints and experiences.
-* Accept constructive criticism gracefully.
-* Foster what's best for the community.
-* Show empathy for community members.
 
 ## GitHub Contribution Workflow
 

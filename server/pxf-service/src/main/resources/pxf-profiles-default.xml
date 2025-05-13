@@ -43,6 +43,7 @@ under the License.
             <mapping option="batch_size" property="jdbc.statement.batchSize"/>
             <mapping option="fetch_size" property="jdbc.statement.fetchSize"/>
             <mapping option="query_timeout" property="jdbc.statement.queryTimeout"/>
+            <mapping option="date_wide_range" property="jdbc.date.wideRange"/>
         </optionMappings>
     </profile>
 
@@ -262,6 +263,17 @@ under the License.
         </plugins>
     </profile>
     <profile>
+        <name>hdfs:fixedwidth</name>
+        <description>This profile is suitable for using when reading fixed field length single line records
+            from plain text files on HDFS.
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+    </profile>
+    <profile>
         <name>s3:text</name>
         <description>This profile is suitable for using when reading delimited single line records
             from plain text, tab-delimited, files on S3
@@ -313,7 +325,24 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:text</name>
+        <name>s3:fixedwidth</name>
+        <description>This profile is suitable for using when reading fixed field length single line records
+            from plain text files on S3.
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+        <protocol>s3a</protocol>
+        <handler>org.greenplum.pxf.plugins.s3.S3ProtocolHandler</handler>
+        <optionMappings>
+            <mapping option="accesskey" property="fs.s3a.access.key"/>
+            <mapping option="secretkey" property="fs.s3a.secret.key"/>
+        </optionMappings>
+    </profile>
+    <profile>
+        <name>abfss:text</name>
         <description>This profile is suitable for using when reading delimited single line records
             from plain text, tab-delimited, files on Azure Data Lake
         </description>
@@ -322,10 +351,10 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
-        <name>adl:csv</name>
+        <name>abfss:csv</name>
         <description>This profile is suitable for using when reading delimited single line records
             from plain text CSV files on Azure Data Lake
         </description>
@@ -334,10 +363,10 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
-        <name>adl:text:multi</name>
+        <name>abfss:text:multi</name>
         <description>This profile is suitable for using when reading delimited single or multi line
             records (with quoted linefeeds) from plain text files on HDFS. It is not splittable (non
             parallel) and slower than HdfsTextSimple.
@@ -347,7 +376,19 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.QuotedLineBreakAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
+    </profile>
+    <profile>
+        <name>abfss:fixedwidth</name>
+        <description>This profile is suitable for using when reading fixed field length single line records
+            from plain text files on Azure Data Lake
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>wasbs:text</name>
@@ -387,9 +428,21 @@ under the License.
         <protocol>wasbs</protocol>
     </profile>
     <profile>
+        <name>wasbs:fixedwidth</name>
+        <description>This profile is suitable for using when reading fixed field length single line records
+            from plain text files on Azure Blob Storage
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+        <protocol>wasbs</protocol>
+    </profile>
+    <profile>
         <name>gs:text</name>
         <description>This profile is suitable for using when reading delimited single line records
-            from plain text, tab-delimited, files on Azure Data Lake
+            from plain text, tab-delimited, files on Google Cloud Storage
         </description>
         <plugins>
             <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
@@ -401,7 +454,7 @@ under the License.
     <profile>
         <name>gs:csv</name>
         <description>This profile is suitable for using when reading delimited single line records
-            from plain text CSV files on Azure Data Lake
+            from plain text CSV files on Google Cloud Storage
         </description>
         <plugins>
             <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
@@ -413,12 +466,24 @@ under the License.
     <profile>
         <name>gs:text:multi</name>
         <description>This profile is suitable for using when reading delimited single or multi line
-            records (with quoted linefeeds) from plain text files on HDFS. It is not splittable (non
+            records (with quoted linefeeds) from plain text files on Google Cloud Storage. It is not splittable (non
             parallel) and slower than HdfsTextSimple.
         </description>
         <plugins>
             <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsFileFragmenter</fragmenter>
             <accessor>org.greenplum.pxf.plugins.hdfs.QuotedLineBreakAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+        <protocol>gs</protocol>
+    </profile>
+    <profile>
+        <name>gs:fixedwidth</name>
+        <description>This profile is suitable for using when reading fixed field length single line records
+            from plain text files on Google Cloud Storage
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
         </plugins>
         <protocol>gs</protocol>
@@ -454,6 +519,17 @@ under the License.
         <plugins>
             <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsFileFragmenter</fragmenter>
             <accessor>org.greenplum.pxf.plugins.hdfs.QuotedLineBreakAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+    </profile>
+    <profile>
+        <name>file:fixedwidth</name>
+        <description>This profile is suitable for using when reading fixed field length single line records
+            from plain text files on network mounted filesystems.
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.plugins.hdfs.HdfsDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.plugins.hdfs.LineBreakAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
         </plugins>
     </profile>
@@ -494,7 +570,7 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:parquet</name>
+        <name>abfss:parquet</name>
         <description>A profile for reading and writing Parquet data from Azure Data Lake
         </description>
         <plugins>
@@ -502,7 +578,7 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.ParquetFileAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.ParquetResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>wasbs:parquet</name>
@@ -563,7 +639,7 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:orc</name>
+        <name>abfss:orc</name>
         <description>A profile for reading ORC data from Azure Data Lake
         </description>
         <plugins>
@@ -571,7 +647,7 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.orc.ORCVectorizedAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.orc.ORCVectorizedResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>gs:orc</name>
@@ -647,7 +723,7 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:avro</name>
+        <name>abfss:avro</name>
         <description>This profile is suitable for using when reading Avro files (i.e
             fileName.avro)
         </description>
@@ -656,7 +732,7 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.AvroFileAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.AvroResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>wasbs:avro</name>
@@ -747,7 +823,7 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:json</name>
+        <name>abfss:json</name>
         <description>
             Access JSON data either as:
             * one JSON record per line (default)
@@ -760,7 +836,7 @@ under the License.
             <resolver>org.greenplum.pxf.plugins.json.JsonResolver</resolver>
         </plugins>
         <handler>org.greenplum.pxf.plugins.json.JsonProtocolHandler</handler>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>wasbs:json</name>
@@ -862,7 +938,7 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:SequenceFile</name>
+        <name>abfss:SequenceFile</name>
         <description>
             Profile for accessing Sequence files serialized with a custom Writable class
         </description>
@@ -871,7 +947,7 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.SequenceFileAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.WritableResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>wasbs:SequenceFile</name>
@@ -927,7 +1003,7 @@ under the License.
         </optionMappings>
     </profile>
     <profile>
-        <name>adl:AvroSequenceFile</name>
+        <name>abfss:AvroSequenceFile</name>
         <description>
             Read an Avro format stored in sequence file, with separated schema file from Azure Data
             Lake
@@ -937,7 +1013,7 @@ under the License.
             <accessor>org.greenplum.pxf.plugins.hdfs.SequenceFileAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.AvroResolver</resolver>
         </plugins>
-        <protocol>adl</protocol>
+        <protocol>abfss</protocol>
     </profile>
     <profile>
         <name>wasbs:AvroSequenceFile</name>
@@ -976,6 +1052,17 @@ under the License.
         <plugins>
             <fragmenter>org.greenplum.pxf.diagnostic.FilterVerifyFragmenter</fragmenter>
             <accessor>org.greenplum.pxf.diagnostic.UserDataVerifyAccessor</accessor>
+            <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
+        </plugins>
+    </profile>
+    <profile>
+        <name>system:sample</name>
+        <description>
+            The system:sample produces a set of sample data for each segment with configurable number of rows.
+        </description>
+        <plugins>
+            <fragmenter>org.greenplum.pxf.diagnostic.EachSegmentDataFragmenter</fragmenter>
+            <accessor>org.greenplum.pxf.diagnostic.SampleDataAccessor</accessor>
             <resolver>org.greenplum.pxf.plugins.hdfs.StringPassResolver</resolver>
         </plugins>
     </profile>

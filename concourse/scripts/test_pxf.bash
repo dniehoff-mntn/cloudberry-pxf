@@ -14,9 +14,6 @@ export JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF8
 export HADOOP_HEAPSIZE=512
 export YARN_HEAPSIZE=512
 export GPHD_ROOT=/singlecluster
-if [[ ${HADOOP_CLIENT} == MAPR ]]; then
-	export GPHD_ROOT=/opt/mapr
-fi
 export PGPORT=${PGPORT:-15432}
 
 function run_pg_regress() {
@@ -66,7 +63,7 @@ function run_pxf_automation() {
 
 	# Let's make sure that automation/singlecluster directories are writeable
 	chmod a+w pxf_src/automation /singlecluster || true
-	find pxf_src/automation/tinc* -type d -exec chmod a+w {} \;
+	find pxf_src/automation/sqlrepo -type d -exec chmod a+w {} \;
 
 	su gpadmin -c "
 		source '${GPHOME}/greenplum_path.sh' &&
@@ -110,60 +107,6 @@ function generate_extras_fat_jar() {
 	popd
 }
 
-function configure_mapr_dependencies() {
-	# Copy mapr specific jars to $PXF_CONF_DIR/lib
-	HADOOP_COMMON=/opt/mapr/hadoop/hadoop-2.7.0/share/hadoop/common
-	cp "${HADOOP_COMMON}/lib/maprfs-5.2.2-mapr.jar" \
-		"${HADOOP_COMMON}/lib/hadoop-auth-2.7.0-mapr-1707.jar" \
-		"${HADOOP_COMMON}/hadoop-common-2.7.0-mapr-1707.jar" "${PXF_CONF_DIR}/lib"
-	# Copy *-site.xml files
-	cp /opt/mapr/hadoop/hadoop-2.7.0/etc/hadoop/*-site.xml "${PXF_CONF_DIR}/servers/default"
-	# Copy mapred-site.xml for recursive hdfs directories test
-	# We need to do this step after PXF Server init
-	cp "${PXF_CONF_DIR}/templates/mapred-site.xml" "${PXF_CONF_DIR}/servers/default/recursive-site.xml"
-	# Set mapr port to 7222 in default.xml (sut)
-	sed -i 's|<port>8020</port>|<port>7222</port>|' pxf_src/automation/src/test/resources/sut/default.xml
-}
-
-function setup_hadoop() {
-	local hdfsrepo=$1
-
-	[[ -z ${GROUP} ]] && return 0
-
-	export SLAVES=1
-	setup_impersonation "${hdfsrepo}"
-	if grep 'hadoop-3' "${hdfsrepo}/versions.txt"; then
-		adjust_for_hadoop3 "${hdfsrepo}"
-	fi
-	start_hadoop_services "${hdfsrepo}"
-}
-
-function configure_sut() {
-	AMBARI_DIR=$(find /tmp/build/ -name ambari_env_files)
-	if [[ -n $AMBARI_DIR  ]]; then
-		REALM=$(cat "$AMBARI_DIR"/REALM)
-		HADOOP_IP=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-1 | awk '{print $1}')
-		HADOOP_USER=$(cat "$AMBARI_DIR"/HADOOP_USER)
-		HBASE_IP=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-3 | awk '{print $1}')
-		HIVE_IP=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-2 | awk '{print $1}')
-		HIVE_HOSTNAME=$(grep < "$AMBARI_DIR"/etc_hostfile ambari-2 | awk '{print $2}')
-		KERBERIZED_HADOOP_URI="hive/${HIVE_HOSTNAME}.c.${GOOGLE_PROJECT_ID}.internal@${REALM};saslQop=auth" # quoted because of semicolon
-		# Add ambari hostfile to /etc/hosts
-		sudo tee --append /etc/hosts < "$AMBARI_DIR"/etc_hostfile
-		sudo cp "$AMBARI_DIR"/krb5.conf /etc/krb5.conf
-		# Replace host, principal, and root path values in the SUT file
-		sed -i \
-			-e "/<hdfs>/,/<\/hdfs/ s|<host>localhost</host>|<host>${HADOOP_IP}</host>|g" \
-			-e "/<hive>/,/<\/hive/ s|<host>localhost</host>|<host>${HIVE_IP}</host>|g" \
-			-e "/<hbase>/,/<\/hbase/ s|<host>localhost</host>|<host>${HBASE_IP}</host>|g" \
-			-e "s|</hdfs>|<hadoopRoot>$AMBARI_DIR</hadoopRoot></hdfs>|g" \
-			-e "s|</hbase>|<hbaseRoot>$AMBARI_DIR</hbaseRoot></hbase>|g" \
-			-e "s|</cluster>|<hiveBaseHdfsDirectory>/warehouse/tablespace/managed/hive/</hiveBaseHdfsDirectory><testKerberosPrincipal>${HADOOP_USER}@${REALM}</testKerberosPrincipal></cluster>|g" \
-			-e "s|</hive>|<kerberosPrincipal>${KERBERIZED_HADOOP_URI}</kerberosPrincipal><userName>hive</userName></hive>|g" \
-			pxf_src/automation/src/test/resources/sut/default.xml
-	fi
-}
-
 function _main() {
 	# kill the sshd background process when this script exits. Otherwise, the
 	# concourse build will run forever.
@@ -171,11 +114,6 @@ function _main() {
 
 	# Ping is called by gpinitsystem, which must be run by gpadmin
 	chmod u+s /bin/ping
-
-	if [[ ${HADOOP_CLIENT} == MAPR ]]; then
-		# start mapr services before installing GPDB
-		/root/init-script
-	fi
 
 	# Install GPDB
 	install_gpdb_binary
@@ -185,7 +123,7 @@ function _main() {
 	install_pxf_client
 	install_pxf_server
 
-	if [[ -z ${PROTOCOL} && ${HADOOP_CLIENT} != MAPR && ${HADOOP_CLIENT} != HDP_KERBEROS ]]; then
+	if [[ ${HADOOP_CLIENT} != HDP_KERBEROS && -z ${PROTOCOL} ]]; then
 		# Setup Hadoop before creating GPDB cluster to use system python for yum install
 		# Must be after installing GPDB to transfer hbase jar
 		setup_hadoop "${GPHD_ROOT}"
@@ -211,21 +149,17 @@ function _main() {
 			echo "${GOOGLE_CREDENTIALS}" > /tmp/gsc-ci-service-account.key.json
 			[[ ${PG_REGRESS} != false ]] && setup_gs_for_pg_regress
 			;;
-		adl)
-			echo 'Using ADL protocol'
-			[[ ${PG_REGRESS} != false ]] && setup_adl_for_pg_regress
+		abfss)
+			echo 'Using ABFSS protocol'
+			[[ ${PG_REGRESS} != false ]] && setup_abfss_for_pg_regress
 			;;
 		wasbs)
 			echo 'Using WASBS protocol'
 			[[ ${PG_REGRESS} != false ]] && setup_wasbs_for_pg_regress
 			;;
 		*) # no protocol, presumably
-			if [[ ${HADOOP_CLIENT} == MAPR ]]; then
-				configure_mapr_dependencies
-			else
-				configure_pxf_default_server
-				configure_pxf_s3_server
-			fi
+			configure_pxf_default_server
+			configure_pxf_s3_server
 			;;
 	esac
 
@@ -233,8 +167,6 @@ function _main() {
 
 	# Create fat jar for automation
 	generate_extras_fat_jar
-
-	configure_sut
 
 	# Run Tests
 	if [[ -n ${GROUP} ]]; then

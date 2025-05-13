@@ -1,16 +1,22 @@
 package org.greenplum.pxf.automation.features.hcfs;
 
+import annotations.WorksWithFDW;
 import org.greenplum.pxf.automation.features.BaseFeature;
 import org.greenplum.pxf.automation.structures.tables.basic.Table;
 import org.greenplum.pxf.automation.structures.tables.utils.TableFactory;
+import org.greenplum.pxf.automation.utils.system.FDWUtils;
 import org.greenplum.pxf.automation.utils.system.ProtocolEnum;
 import org.greenplum.pxf.automation.utils.system.ProtocolUtils;
 import org.testng.annotations.Test;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Functional Globbing Tests. Tests are based on Hadoop Glob Tests
  * https://github.com/apache/hadoop/blob/rel/release-3.2.1/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/fs/TestGlobPaths.java
  */
+@WorksWithFDW
 public class HcfsGlobbingTest extends BaseFeature {
 
     public static final String[] FIELDS = {
@@ -30,7 +36,7 @@ public class HcfsGlobbingTest extends BaseFeature {
     @Test(groups = {"gpdb", "hcfs", "security"})
     public void testMatchZeroOrMoreCharacters() throws Exception {
         prepareTestScenario("match_zero_or_more_characters_1", "a", "abc", "abc.p", "bacd", "a*");
-        prepareTestScenario("match_zero_or_more_characters_2", "a.", "a.txt", "a.old.java", ".java", "a.*");
+        prepareTestScenario("match_zero_or_more_characters_2", "a.|", "a.txt", "a.old.java", ".java", "a.*");
         prepareTestScenario("match_zero_or_more_characters_3", "a.txt.x", "ax", "ab37x", "bacd", "a*x");
         prepareTestScenario("match_zero_or_more_characters_4", "dir1/file1", "dir2/file2", "dir3/file1", null, "*/file1");
         prepareTestScenario("match_zero_or_more_characters_5", "dir1/file1", "file1", null, null, "*/file1");
@@ -85,6 +91,7 @@ public class HcfsGlobbingTest extends BaseFeature {
         prepareTestScenario("match_string_from_string_set_4", "match_string_from_string_set_10", null, null, null, null, "}{ac,?}");
         // test ill-formed curly
         prepareTestScenario("match_string_from_string_set_4", "match_string_from_string_set_11", null, null, null, null, "}{bc");
+
         // test escape curly
         prepareTestScenario("match_string_from_string_set_12", "}{bc", "}bc", null, null, "}\\\\{bc");
         runTestScenario("match_string_from_string_set");
@@ -92,7 +99,13 @@ public class HcfsGlobbingTest extends BaseFeature {
 
     @Test(groups = {"gpdb", "hcfs", "security"})
     public void testJavaRegexSpecialChars() throws Exception {
-        prepareTestScenario("java_regex_special_chars", "(.|+)bc", "abc", null, null, "(.|+)*");
+        // The earlier path (.|+)bc and the glob value (.|+)* is failing for GP7 with this error:
+        // select * from hcfs_glob_java_regex_special_chars;
+        // ERROR:  invalid URI '+)*?PROFILE=hdfs:text' : undefined structure
+        // due to the fact that the current implementation of gp_exttable_fdw that supports external tables in GP7
+        // treats the pipe "|" symbol in the value of LOCATION clause as a separator for the list of URLs
+        // So we have to change this test to remove the pipe symbol from our file names and glob values
+        prepareTestScenario("java_regex_special_chars", "(.+)bc", "abc", null, null, "(.+)*");
         runTestScenario("java_regex_special_chars");
     }
 
@@ -103,7 +116,7 @@ public class HcfsGlobbingTest extends BaseFeature {
     }
 
     private void runTestScenario(String testGroup) throws Exception {
-        runTincTest("pxf.features.hcfs.globbing." + testGroup + ".runTest");
+        runSqlTest("features/hcfs/globbing/" + testGroup);
     }
 
     private void prepareTestScenario(String testName, String data1, String data2, String data3, String data4, String glob) throws Exception {
@@ -116,13 +129,27 @@ public class HcfsGlobbingTest extends BaseFeature {
         prepareTableData(path, data3, "3c");
         prepareTableData(path, data4, "4d");
 
+        // wait until all the files exist, before continuing the test
+        List<String> datafiles = Arrays.asList(data1, data2, data3, data4);
+        datafiles.parallelStream().forEach(datafile -> {
+            if (datafile != null) {
+                hdfs.waitForFile(hdfs.getWorkingDirectory() + "/" + path + "/" + datafile, 240);
+            }
+        });
+
         ProtocolEnum protocol = ProtocolUtils.getProtocol();
 
         // Create GPDB external table directed to the HDFS file
+
+        String updatedPath = protocol.getExternalTablePath(hdfs.getBasePath(), hdfs.getWorkingDirectory()) + "/" + path + "/" + glob;
+        if (FDWUtils.useFDW) {
+            updatedPath = "E'"+ updatedPath +"'";
+        }
+
         exTable = TableFactory.getPxfReadableTextTable(
                 "hcfs_glob_" + testName,
                 FIELDS,
-                protocol.getExternalTablePath(hdfs.getBasePath(), hdfs.getWorkingDirectory()) + "/" + path + "/" + glob,
+                updatedPath,
                 ",");
         exTable.setHost(pxfHost);
         exTable.setPort(pxfPort);

@@ -19,7 +19,9 @@ import static org.greenplum.pxf.api.model.ConfigurationFactory.PXF_CONFIG_SERVER
 import static org.greenplum.pxf.api.model.ConfigurationFactory.PXF_SERVER_NAME_PROPERTY;
 
 public enum HcfsType {
-    ADL,
+    // We prefer ABFSS over ABFS for Azure Data Lake Gen 2,
+    // as it uses SSL for communication to Azure servers
+    ABFSS,
     CUSTOM {
         @Override
         public String getDataUri(RequestContext context) {
@@ -128,7 +130,7 @@ public enum HcfsType {
      * @return an absolute data path for write
      */
     public String getUriForWrite(RequestContext context) {
-        return getUriForWrite(context, null);
+        return getUriForWrite(context, null, null);
     }
 
     /**
@@ -138,19 +140,24 @@ public enum HcfsType {
      * default codec extension will be appended to the name of the file.
      *
      * @param context          the input data parameters
+     * @param extension        the extension for the file type to use before the compression extension
      * @param compressionCodec the compression coded used for the extension
      * @return an absolute data path for write
      */
-    public String getUriForWrite(RequestContext context, CompressionCodec compressionCodec) {
+    public String getUriForWrite(RequestContext context, String extension, CompressionCodec compressionCodec) {
         String fileName = String.format("%s/%s_%d",
                 StringUtils.removeEnd(getDataUri(context), "/"),
                 context.getTransactionId(),
                 context.getSegmentId());
 
+        if (extension != null) {
+            // append type extension to the filename
+            fileName += extension.startsWith(".") ? extension : "." + extension;
+        }
+
         if (compressionCodec != null) {
-            String extension = compressionCodec.getDefaultExtension();
             // append codec extension to the filename
-            fileName += extension;
+            fileName += compressionCodec.getDefaultExtension();
         }
 
         LOG.debug("File name for write: {}", fileName);

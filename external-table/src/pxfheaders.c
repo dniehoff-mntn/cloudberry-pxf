@@ -36,7 +36,10 @@
 static void add_alignment_size_httpheader(CHURL_HEADERS headers);
 static void add_tuple_desc_httpheader(CHURL_HEADERS headers, Relation rel);
 static void add_location_options_httpheader(CHURL_HEADERS headers, GPHDUri *gphduri);
-static char *get_format_name(char fmtcode);
+static char *get_format_name(ExtTableEntry *exttbl);
+static char *getFormatterString(ExtTableEntry *exttbl);
+static bool isFormatterPxfDelimited(ExtTableEntry *exttbl);
+static bool isFormatterPxfWritable(ExtTableEntry *exttbl);
 
 #if PG_VERSION_NUM >= 120000
 static void add_projection_desc_httpheader_pg12(CHURL_HEADERS headers, ProjectionInfo *projInfo, List *qualsAttributes, Relation rel);
@@ -46,9 +49,26 @@ static void add_projection_desc_httpheader_pg94(CHURL_HEADERS headers, Projectio
 
 static bool add_attnums_from_targetList(Node *node, List *attnums);
 static void add_projection_index_header(CHURL_HEADERS pVoid, StringInfoData data, int attno, char number[32]);
+static List *appendCopyEncodingOptionToList(List *copyFmtOpts, int encoding);
+static int  *getVarNumbers(ProjectionInfo *projInfo);
+static List *getTargetList(ProjectionInfo *projInfo);
+static bool needToIterateTargetList(List *targetList, int *varNumbers);
+static Node *getTargetListEntryExpression(ListCell *lc1);
+static int  getNumSimpleVars(ProjectionInfo *projInfo);
+
 #if PG_VERSION_NUM < 90400
+/*
+ * this function is copied from Greenplum 6 (6X_STABLE branch) code
+ * it is defined here for compilation with Greenplum 5 only
+ * for compilation with Greenplum 6 it is defined in included fileam.h
+ * in Greenplum 7 we do not need to define and call it as all options (copy or custom)
+ * are added to ExtTableEntry.options list by external.c::GetExtFromForeignTableOptions()
+ */
 static List *parseCopyFormatString(Relation rel, char *fmtstr, char fmttype);
-static List *appendCopyEncodingOption(List *copyFmtOpts, int encoding);
+
+// Copied this Macro from tupdesc.h (6.x), since this is not present in GPDB 5
+/* Accessor for the i'th attribute of tupdesc. */
+#define TupleDescAttr(tupdesc, i) ((tupdesc)->attrs[(i)])
 #endif
 
 /*
@@ -78,8 +98,22 @@ build_http_headers(PxfInputData *input)
 		ListCell   *option;
 		List	   *copyFmtOpts = NIL;
 
-		/* pxf treats CSV as TEXT */
-		char *format = get_format_name(exttbl->fmtcode);
+		// in the case of PxfDelimitedFormatter formatter, the only viable profiles are *:text and *:csv.
+		// error out early here if the profile is not accepted
+		if (getFormatterString(exttbl) && // if the formatter string is non empty
+			isFormatterPxfDelimited(exttbl) && // and the formatter is PxfDelimitedFormatter
+			(!input->gphduri->profile || // if the profile is empty OR
+				(!strstr(input->gphduri->profile, ":text") && // the profile is neither text
+					!strstr(input->gphduri->profile, ":csv")))) // nor csv
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("The \"%s\" formatter only works with *:text or *:csv profiles.", PxfDelimitedFormatter),
+					 errhint("Please double check the profile option in the external table definition.")));
+		}
+
+		/* pxf treats everything but pxfwritable_[import|export] as TEXT (even CSV) */
+		char *format = get_format_name(exttbl);
 
 		churl_headers_append(headers, "X-GP-FORMAT", format);
 
@@ -93,12 +127,8 @@ build_http_headers(PxfInputData *input)
 #endif
     }
 
-#if PG_VERSION_NUM >= 120000
-    /* pass external table's encoding to copy's options */
-    copyFmtOpts = lappend(copyFmtOpts, makeDefElem("encoding", (Node *)makeString((char *)pg_encoding_to_char(exttbl->encoding)), -1));
-#else
-        copyFmtOpts = appendCopyEncodingOption(copyFmtOpts, exttbl->encoding);
-#endif
+		/* pass external table's encoding to copy's options */
+		copyFmtOpts = appendCopyEncodingOptionToList(copyFmtOpts, exttbl->encoding);
 
 		/* Extract options from the statement node tree */
 		foreach(option, copyFmtOpts)
@@ -375,6 +405,216 @@ add_tuple_desc_httpheader(CHURL_HEADERS headers, Relation rel)
 
 	pfree(formatter.data);
 }
+
+/*
+ * Returns pre-computed array of simple var attrnos, if available
+ */
+static inline int*
+getVarNumbers(ProjectionInfo *projInfo) {
+#if PG_VERSION_NUM >= 120000
+	return NULL; // does not exist in projInfo in GP7
+#else
+	return projInfo->pi_varNumbers;
+#endif
+}
+
+/*
+ * Returns targetList from provided ProjectionInfo
+ */
+static inline List*
+getTargetList(ProjectionInfo *projInfo)
+{
+#if PG_VERSION_NUM >= 120000
+	return (List *) projInfo->pi_state.expr;
+#else
+	return projInfo->pi_targetlist;
+#endif
+}
+
+/*
+ * Determines whether there is a need to iterate over the targetList to find projected attributes
+ */
+static inline bool
+needToIterateTargetList(List *targetList, int *varNumbers)
+{
+#if PG_VERSION_NUM >= 90400
+	/*
+	 * In GP6 non-simple Vars are added to the targetlist of ProjectionInfo while
+	 * simple Vars are pre-computed and their attnos are placed into varNumbers array
+	 * In GP7 everything is in targetList
+	 */
+	return (targetList != NULL);
+#else
+	/*
+	 * In GP5 if targetList contains ONLY simple Vars their attrnos will be populated into varNumbers array
+	 * otherwise the varNumbers array will be NULL, and we will need to iterate over the targetList
+	 */
+	return (varNumbers == NULL);
+#endif
+}
+
+/*
+ * Returns expression for a targetList entry.
+ */
+static inline
+Node *getTargetListEntryExpression(ListCell *lc1)
+{
+#if PG_VERSION_NUM >= 120000
+	ExprState *gstate = (ExprState *) lfirst(lc1);
+	return (Node *) gstate;
+#else
+	GenericExprState *gstate = (GenericExprState *) lfirst(lc1);
+	return (Node *) gstate->arg->expr;
+#endif
+};
+
+/*
+ * Returns a count of simpleVars if they were pre-computed.
+ */
+static inline
+int getNumSimpleVars(ProjectionInfo *projInfo)
+{
+	int numSimpleVars = 0;
+#if PG_VERSION_NUM < 90400
+	// in GP5 if varNumbers is not NULL, it means the attrnos have been pre-computed in varNumbers
+	// and targetList consists only of simpleVars, so we can use its length
+	if (projInfo->pi_varNumbers)
+	{
+		numSimpleVars = list_length(projInfo->pi_targetlist);
+	}
+#elif PG_VERSION_NUM < 120000
+	// in GP6 we can get this value from projInfo
+	numSimpleVars = projInfo->pi_numSimpleVars;
+#else
+	// in GP7 there is no precomputation, the numSimpleVars stays at 0
+#endif
+	return numSimpleVars;
+};
+
+/*
+ * Report projection description to the remote component, the indices of
+ * dropped columns do not get reported, as if they never existed, and
+ * column indices that follow dropped columns will be shifted by the number
+ * of dropped columns that precede it. For example,
+ *
+ *  ---------------------------------------------
+ * |  col1  |  col2 (dropped)  |  col3  |  col4  |
+ *  ---------------------------------------------
+ *
+ * Let's assume that col1 and col4 are projected, the reported projected
+ * indices will be 0, 2. This is because we use 0-based indexing and because
+ * col2 was dropped, the indices for col3 and col4 get shifted by -1.
+ */
+
+#if PG_VERSION_NUM < 120000
+static void
+add_projection_desc_httpheader_pg94(CHURL_HEADERS headers,
+                 ProjectionInfo *projInfo,
+                 List *qualsAttributes,
+                 Relation rel)
+{
+	int			   i;
+	int			   droppedCount;  // count of dropped attributes
+	int			   headerCount;   // count of created http headers
+	char		   long_number[sizeof(int32) * 8];
+	int			   numSimpleVars; // number of pre-computed simple vars
+	int			   *varNumbers;   // pre-computed array of simple var attrnos
+
+	Bitmapset	   *attrs_used;   // hashset to keep and de-dup collected attrnos
+	StringInfoData	formatter;
+	List		   *targetList;   // targetList from the query plan
+	TupleDesc	   tupdesc;
+
+	// STEP 0: initialize variables
+	initStringInfo(&formatter);
+	attrs_used = NULL;
+	targetList = getTargetList(projInfo);
+	varNumbers = getVarNumbers(projInfo);
+
+	// STEP 1: collect attribute numbers (attrno) from the targetList, if necessary
+	if (needToIterateTargetList(targetList, varNumbers)) {
+		/*
+		 * we use expression_tree_walker to access attrno information
+		 * we do it through a helper function add_attnums_from_targetList
+		 */
+		List     *l = lappend_int(NIL, 0);
+		ListCell *lc1;
+
+		foreach(lc1, targetList)
+		{
+			Node *node = getTargetListEntryExpression(lc1);
+			add_attnums_from_targetList(node, l);
+		}
+
+		foreach(lc1, l)
+		{
+			int attno = lfirst_int(lc1);
+			if (attno > InvalidAttrNumber)
+			{
+				attrs_used =
+					bms_add_member(attrs_used,
+								 attno - FirstLowInvalidHeapAttributeNumber);
+			}
+		}
+
+		list_free(l);
+	}
+
+	// STEP 2: collect attribute numbers from pre-computed list of varNumbers (if available) of simpleVars
+	numSimpleVars = getNumSimpleVars(projInfo);
+	for (i = 0; varNumbers && i < numSimpleVars; i++)
+	{
+		attrs_used =
+			bms_add_member(attrs_used,
+						 varNumbers[i] - FirstLowInvalidHeapAttributeNumber);
+	}
+
+	// STEP 3: collect attribute numbers from qualifiers (WHERE conditions)
+	ListCell *attribute = NULL;
+	foreach(attribute, qualsAttributes)
+	{
+		AttrNumber attrNumber = (AttrNumber) lfirst_int(attribute);
+		attrs_used =
+			bms_add_member(attrs_used,
+						 attrNumber + 1 - FirstLowInvalidHeapAttributeNumber);
+	}
+
+	// STEP 4: for attributes in the relation that are not dropped, add projection headers for those selected in steps 0 - 3 above
+	tupdesc = RelationGetDescr(rel);
+	droppedCount = 0;
+	headerCount = 0;
+
+	for (i = 1; i <= tupdesc->natts; i++)
+	{
+		/* Ignore dropped attributes. */
+		if (TupleDescAttr(tupdesc, i - 1)->attisdropped)
+		{
+			/* keep a counter of the number of dropped attributes */
+			droppedCount++;
+			continue;
+		}
+
+		if (bms_is_member(i - FirstLowInvalidHeapAttributeNumber, attrs_used))
+		{
+			/* Shift the column index by the running dropped_count */
+			add_projection_index_header(headers, formatter,
+										i - 1 - droppedCount, long_number);
+			headerCount++;
+		}
+	}
+
+	if (headerCount != 0)
+	{
+		/* Convert the number of projection columns to a string */
+		pg_ltoa(headerCount, long_number);
+		churl_headers_append(headers, "X-GP-ATTRS-PROJ", long_number);
+	}
+
+	list_free(qualsAttributes);
+	pfree(formatter.data);
+	bms_free(attrs_used);
+}
+#endif
 
 /*
  * Report projection description to the remote component, the indices of
@@ -704,30 +944,104 @@ add_location_options_httpheader(CHURL_HEADERS headers, GPHDUri *gphduri)
 }
 
 /*
- * Converts a character code for the format name into a string of format definition
+ * Converts a character code for the format name and the formatter name into a string
+ * that represents PXF transport format (TEXT or GPDBWritable)
  */
 static char *
-get_format_name(char fmtcode)
+get_format_name(ExtTableEntry *exttbl)
 {
 	char	   *formatName = NULL;
 
-	if (fmttype_is_text(fmtcode) || fmttype_is_csv(fmtcode))
+	if (fmttype_is_text(exttbl->fmtcode) || fmttype_is_csv(exttbl->fmtcode))
 	{
 		formatName = TextFormatName;
 	}
-	else if (fmttype_is_custom(fmtcode))
+	else if (fmttype_is_custom(exttbl->fmtcode))
 	{
-		formatName = GpdbWritableFormatName;
+		// need to determine if the formatter is pxfwritable_import or pxfwritable_export which requires
+		// us to send to PXF the value of on-the-wire format as "GPDBWritable"
+		if (isFormatterPxfWritable(exttbl)) {
+			formatName = GpdbWritableFormatName;
+		}
+		else
+		{
+			// treat other custom formatters (such as 'fixedwidth_in') as TEXT for PXF transport
+			formatName = TextFormatName;
+		}
 	}
 	else
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_INTERNAL_ERROR),
 				 errmsg("unable to get format name for format code: %c",
-						fmtcode)));
+						exttbl->fmtcode)));
 	}
 
 	return formatName;
+}
+
+/*
+ * Returns the name of the formatter (GP7)
+ * Returns the string containing all format options information (GP6 & GP5)
+ * Returns NULL otherwise
+ */
+static char*
+getFormatterString(ExtTableEntry *exttbl)
+{
+	char *formatterNameSearchString = NULL;
+
+#if PG_VERSION_NUM >= 120000
+	// for GP7 the custom formatter name is among all other options of the corresponding foreign table
+	ListCell   *option;
+	foreach (option, exttbl->options) {
+		DefElem *defel = (DefElem *) lfirst(option);
+		if (strcmp(defel->defname, "formatter") == 0) {
+			formatterNameSearchString = defGetString(defel);
+			break;
+		}
+	}
+#else
+	// for GP5 and GP6, we only have a serialized string of formatter options,
+	// parsing it requires porting a lot of code from GP6 so return the entire serialized string
+	formatterNameSearchString = exttbl->fmtopts;
+#endif
+
+	return formatterNameSearchString;
+}
+
+/*
+ * Checks if the custom formatter specified for the table is pxfdelimited_import
+ */
+static bool
+isFormatterPxfDelimited(ExtTableEntry *exttbl)
+{
+	char *formatterNameSearchString = getFormatterString(exttbl);
+
+	if (!formatterNameSearchString || !strlen(formatterNameSearchString))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("cannot determine the name of a custom formatter")));
+	}
+
+	return strstr(formatterNameSearchString, PxfDelimitedFormatter) != NULL;
+}
+/*
+ * Checks if the custom formatter specified for the table starts with pxfwritable_ prefix
+ */
+static bool
+isFormatterPxfWritable(ExtTableEntry *exttbl)
+{
+	char *formatterNameSearchString = getFormatterString(exttbl);
+
+	if (!formatterNameSearchString || !strlen(formatterNameSearchString))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("cannot determine the name of a custom formatter")));
+	}
+
+	return strstr(formatterNameSearchString, PXFWritableFormatterPrefix) != NULL;
 }
 
 /*
@@ -765,6 +1079,21 @@ add_attnums_from_targetList(Node *node, List *attnums)
 	return expression_tree_walker(node,
 								  add_attnums_from_targetList,
 								  (void *) attnums);
+}
+
+/*
+ * This function is copied from fileam.c::appendCopyEncodingOption() in the 6X_STABLE branch.
+ * appendCopyEncodingOption() does not exist on GP5
+ * and in GP7 it is now a part of gpcontrib/gp_exttable_fdw/extaccess.c that is not easily linkable,
+ * so we just define it here with a different name for all versions to use
+ */
+static List *
+appendCopyEncodingOptionToList(List *copyFmtOpts, int encoding) {
+	return lappend(copyFmtOpts, makeDefElem("encoding", (Node *) makeString((char *) pg_encoding_to_char(encoding))
+#if PG_VERSION_NUM >= 120000 // GP7 requires an extra parameter for makeDefElem()
+					, -1
+#endif
+					));
 }
 
 #if PG_VERSION_NUM < 90400
@@ -973,13 +1302,4 @@ parseCopyFormatString(Relation rel, char *fmtstr, char fmttype)
 			        errmsg("external table internal parse error at end of line")));
 }
 
-/*
- * This function is copied from fileam.c in the 6X_STABLE branch.
- * In version 6, this function is no longer required to be copied.
- */
-static List *
-appendCopyEncodingOption(List *copyFmtOpts, int encoding)
-{
-	return lappend(copyFmtOpts, makeDefElem("encoding", (Node *)makeString((char *)pg_encoding_to_char(encoding))));
-}
 #endif

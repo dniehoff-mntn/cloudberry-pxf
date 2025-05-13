@@ -2,10 +2,14 @@ ARG BASE_IMAGE=gcr.io/data-gpdb-public-images/gpdb5-centos7-build-test:latest
 
 FROM ${BASE_IMAGE}
 
-ARG GINKGO_VERSION
+ARG GO_VERSION
+ARG GO_SHA256SUM
 
 # install Go utilities
-RUN GOPATH=/opt/go /usr/local/go/bin/go install github.com/onsi/ginkgo/ginkgo@v${GINKGO_VERSION}
+RUN mkdir -p /tmp/pxf_src/ && cd /tmp \
+    && wget -O go.tgz -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
+    && echo "${GO_SHA256SUM} /tmp/go.tgz" | sha256sum --check \
+    && rm -rf /usr/local/go && tar -C /usr/local -xzf go.tgz && rm go.tgz
 
 # add Java 8, Java 11, jq and rpm-build
 RUN yum install -y rpm-build java-1.8.0-openjdk-devel jq && yum clean all \
@@ -45,8 +49,6 @@ RUN ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa \
     && echo -e "password\npassword" | passwd gpadmin 2> /dev/null \
     && { ssh-keyscan localhost; ssh-keyscan 0.0.0.0; } >> /home/gpadmin/.ssh/known_hosts \
     && chown -R gpadmin:gpadmin /home/gpadmin/.ssh \
-    # install psi
-    && /usr/bin/pip install psi --no-cache-dir \
     # remove any java customization
     && rm -rf /etc/profile.d/java.sh \
     # configure gpadmin limits
@@ -60,11 +62,11 @@ RUN ssh-keygen -t rsa -N "" -f /root/.ssh/id_rsa \
     && echo >> ~gpadmin/.pxfrc 'export PGPORT=5432' \
     && echo >> ~gpadmin/.pxfrc 'export GOPATH=/opt/go' \
     && echo >> ~gpadmin/.pxfrc 'export GPHOME=$(find /usr/local/ -name greenplum-db* -type d | head -n1)' \
-    && echo >> ~gpadmin/.pxfrc 'export LD_LIBRARY_PATH=${GPHOME}/lib:${LD_LIBRARY_PATH-}' \
     && echo >> ~gpadmin/.pxfrc 'export GPHD_ROOT=/singlecluster' \
     && echo >> ~gpadmin/.pxfrc 'export PXF_HOME=/usr/local/pxf-gp5' \
     && echo >> ~gpadmin/.pxfrc 'export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk' \
-    && echo >> ~gpadmin/.pxfrc 'export PATH=${GPHOME}/bin:${PXF_HOME}/bin:${GOPATH}/bin:/usr/local/go/bin:$PATH' \
+    && echo >> ~gpadmin/.pxfrc 'export PG_CONFIG=${GPHOME}/bin/pg_config' \
+    && echo >> ~gpadmin/.pxfrc 'export PATH=${PXF_HOME}/bin:${GOPATH}/bin:/usr/local/go/bin:$PATH' \
     && ln -s ~gpadmin/.pxfrc ~root \
     && echo >> ~gpadmin/.bashrc 'source ~/.pxfrc' \
     && chown -R gpadmin:gpadmin ~gpadmin

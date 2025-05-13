@@ -29,6 +29,11 @@ plugins {
     id 'io.spring.dependency-management' version '1.0.11.RELEASE'
 }
 
+// override Spring Framework version to pick the Spring MVC 5.3.33 with the async race condition fix
+// https://github.com/spring-projects/spring-framework/issues/32342
+ext['spring-framework.version'] = '5.3.33'
+ext['tomcat.version'] = '9.0.87'
+
 def javaProjects = subprojects.findAll {
     it.name.startsWith("pxf-")
 }
@@ -75,8 +80,9 @@ configure(javaProjects) {
             dependency("com.google.guava:guava:20.0")
             dependency("com.google.protobuf:protobuf-java:2.5.0")
             dependency("com.google.cloud.bigdataoss:gcs-connector:hadoop2-1.9.17")
-            dependency("com.microsoft.azure:azure-storage:5.4.0")
+            dependency("com.microsoft.azure:azure-storage:5.5.0")
             dependency("com.microsoft.azure:azure-data-lake-store-sdk:2.3.9")
+            dependency("com.univocity:univocity-parsers:2.9.1")
             dependency("com.yammer.metrics:metrics-core:2.2.0")
             dependency("com.zaxxer:HikariCP:3.4.5")
             dependency("commons-codec:commons-codec:1.14")
@@ -103,20 +109,18 @@ configure(javaProjects) {
             dependency("org.mortbay.jetty:jetty-util:6.1.26")
             dependency("org.objenesis:objenesis:2.1")
 
-            // ---- bump postgresql to 42.4.1 for CVE-2022-31197 fixes
-            // more details: https://nvd.nist.gov/vuln/detail/CVE-2022-31197
-            // revert once springboot provided postgresql is upgraded to bundle postgresql:42.4.1+
-            dependency("org.postgresql:postgresql:42.4.1")
+            // revert once springboot provided postgresql is upgraded to bundle postgresql:42.7.2+
+            dependency("org.postgresql:postgresql:42.7.2")
 
             dependency("org.apache.tomcat.embed:tomcat-embed-core:9.0.72")
             dependency("org.apache.tomcat.embed:tomcat-embed-el:9.0.72")
             dependency("org.apache.tomcat.embed:tomcat-embed-websocket:9.0.72")
 
-            dependency("org.simplify4u:slf4j-mock:2.1.0")
+            dependency("org.simplify4u:slf4j-mock:2.3.0")
             dependency("org.threeten:threeten-extra:1.5.0")
             dependency("org.tukaani:xz:1.8")
             dependency("org.wildfly.openssl:wildfly-openssl:1.0.7.Final")
-            dependency("org.xerial.snappy:snappy-java:1.1.8.4")
+            dependency("org.xerial.snappy:snappy-java:1.1.10.4")
 
             // Hadoop dependencies
             dependencySet(group:"org.apache.hadoop", version:"${hadoopVersion}") {
@@ -202,6 +206,19 @@ configure(javaProjects) {
                 entry("aws-java-sdk-s3")
             }
 
+            // currently imported BOM spring-boot-dependencies:2.5.12 includes log4j-bom:2.17.2 and
+            // importing a module log4j-spring-boot:2.17.2 results in its transitive Junit dependencies
+            // being put into compileClasspath so we have to exclude them here so they are not shipped with PXF
+            // this is fixed in log4j-spring-boot:2.19.0, which is used by spring-boot-dependencies:3.0.0+
+            // so when we upgrade to Spring Boot version 3.0.0+ we should remove this fix
+            // alternatively we can bump log4j-spring-boot to 2.19.0 and not use excludes
+            // dependency("org.apache.logging.log4j:log4j-spring-boot:2.19.0")
+            dependency("org.apache.logging.log4j:log4j-spring-boot:2.17.2") {
+                exclude("org.junit.vintage:junit-vintage-engine")
+                exclude("org.junit.jupiter:junit-jupiter-engine")
+                exclude("org.junit.jupiter:junit-jupiter-api")
+            }
+
         }
     }
 
@@ -234,10 +251,74 @@ configure(javaProjects) {
             extendsFrom annotationProcessor
         }
 
+        // create a full list of dependencies shipped with PXF to make sure we give proper attribution
+        licenseScanner {
+            extendsFrom runtimeClasspath
+            // runtimeClasspath includes development-only dependencies, explicitly exclude them here
+            exclude group: 'org.springframework.boot', module: 'spring-boot-devtools'
+            exclude group: 'com.fasterxml.jackson', module: 'jackson-bom'
+            // some dependencies shipped with PXF were not automatically included, include them here
+            dependencies {
+                // declare the dependency spring-boot-loader in the scope of the license scanner configuration
+                // https://docs.gradle.org/current/userguide/declaring_dependencies.html#sec:resolvable-consumable-configs
+                licenseScanner('org.springframework.boot:spring-boot-loader')
+            }
+        }
+
         all*.exclude group: 'javax.servlet', module: 'servlet-api'
         all*.exclude group: 'org.springframework.boot', module: 'spring-boot-starter-logging'
         all*.exclude group: 'org.slf4j', module: 'slf4j-log4j12'
     }
+
+    test {
+        testLogging {
+            // log test names only when failed
+            events "failed"
+        }
+
+        // slightly modified from https://stackoverflow.com/a/36130467
+        afterSuite { desc, result ->
+            if (!desc.parent) { // print only for the entire sub project not per test suite
+                def suiteSummary = "${project.name} Test Results: ${result.resultType} " +
+                        "(${result.testCount} tests, " +
+                        "${result.successfulTestCount} passed, " +
+                        "${result.failedTestCount} failed, " +
+                        "${result.skippedTestCount} skipped)"
+                printResults(suiteSummary)
+
+                // add results to combined total
+                totalTests += result.testCount
+                totalSuccesses += result.successfulTestCount
+                totalFailures += result.failedTestCount
+                totalSkipped += result.skippedTestCount
+            }
+        }
+    }
+}
+
+// used for test statistics
+ext {
+    totalTests = 0L
+    totalSuccesses = 0L
+    totalFailures = 0L
+    totalSkipped = 0L
+}
+
+gradle.buildFinished {
+    def combinedSummary = "Total Results: " +
+            "${totalTests} tests, " +
+            "${totalSuccesses} passed, " +
+            "${totalFailures} failed, " +
+            "${totalSkipped} skipped"
+    printResults(combinedSummary)
+}
+
+private static void printResults(result) {
+    def startItem = '│ ', endItem = ' │'
+    def repeatLength = startItem.length() + result.length() + endItem.length() - 2
+    println('\n' + '┌' + ('-' * repeatLength) + '┐' +
+            '\n' + startItem + result + endItem +
+            '\n' + '└' + ('-' * repeatLength) + '┘')
 }
 
 task stage(type: Copy) {
@@ -261,7 +342,7 @@ task stage(type: Copy) {
         filter { line -> line.replaceAll('_PXF_VERSION_', "${version}") }
     }
     from('pxf-service/src/templates')
-    into "$buildDir/stage/pxf"
+    into "$buildDir/stage"
 
-    doLast { new File("${buildDir}/stage/pxf/version").text = "${version}\n" }
+    doLast { new File("${buildDir}/stage/version").text = "${version}\n" }
 }

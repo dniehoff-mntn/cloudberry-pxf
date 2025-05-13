@@ -109,7 +109,7 @@ resources:
   type: gcs
   icon: google-drive
   source:
-    bucket: ((ud/pxf/common/pivnet-artifacts-bucket-name))
+    bucket: ((ud/pxf/common/gpdb-artifacts-bucket-name))
     json_key: ((ud/pxf/secrets/pxf-storage-service-account-key))
     regexp: latest-0_gpdb6/greenplum-db-(.*)-rhel[[redhat_major_version]]-x86_64.rpm
 
@@ -127,7 +127,7 @@ resources:
   type: registry-image
   icon: docker
   source:
-    repository: gcr.io/data-gpdb-ud/gpdb-pxf-dev/gpdb6-rhel8-test-pxf
+    repository: gcr.io/data-gpdb-ud/gpdb-pxf-dev/gpdb6-rocky8-test-pxf
     tag: latest
     username: _json_key
     password: ((ud/pxf/secrets/pxf-cloudbuild-service-account-key))
