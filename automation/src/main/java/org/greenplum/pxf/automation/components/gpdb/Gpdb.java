@@ -22,7 +22,9 @@ import java.util.List;
 public class Gpdb extends DbSystemObject {
 
 	private static final String DEFAULT_PORT = "5432";
-	private static final String GREENPLUM_DATABASE_PREFIX = "Greenplum Database ";
+	// TODO: This should detect the correct prefix instead of hardcoding it
+	// private static final String GREENPLUM_DATABASE_PREFIX = "Apache Cloudberry "; // for main
+	private static final String GREENPLUM_DATABASE_PREFIX = "Cloudberry Database "; // for 1.6.0
 	private static final String IF_NOT_EXISTS_OPTION = "IF NOT EXISTS";
 
 	private String sshUserName;
