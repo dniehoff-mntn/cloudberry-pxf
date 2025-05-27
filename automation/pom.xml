@@ -31,6 +31,10 @@
             <url>artifactregistry://us-central1-maven.pkg.dev/data-gpdb-ud/pxf-automation-test</url>
         </repository>-->
         <repository>
+            <id>main</id>
+            <url>https://repo.maven.apache.org/maven2/</url>
+        </repository>
+        <repository>
             <id>bincenter</id>
             <url>https://maven.top-q.co.il/content/repositories/public/</url>
         </repository>

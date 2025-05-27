@@ -106,6 +106,6 @@ SELECT * from writable_avro_primitive_generate_schema_readable ORDER BY type_int
        96 |            96 |  9600000000000 |    97.0001 | 9600000.0096 | row_96      | bytes for 96  | t            | character row 96     | character varying row 96
        97 |            97 |  9700000000000 |    98.0001 | 9700000.0097 | row_97      | bytes for 97  | f            | character row 97     | character varying row 97
        98 |            98 |  9800000000000 |    99.0001 | 9800000.0098 | row_98      | bytes for 98  | t            | character row 98     | character varying row 98
-       99 |            99 |  9900000000000 |        100 | 9900000.0099 | row_99      | bytes for 99  | f            | character row 99     | character varying row 99
-      100 |           100 | 10000000000000 |        101 |  10000000.01 | row_100     | bytes for 100 | t            | character row 100    | character varying row 100
+       99 |            99 |  9900000000000 |   100.0001 | 9900000.0099 | row_99      | bytes for 99  | f            | character row 99     | character varying row 99
+      100 |           100 | 10000000000000 |   101.0001 |  10000000.01 | row_100     | bytes for 100 | t            | character row 100    | character varying row 100
 (100 rows)

@@ -41,10 +41,6 @@ gpinitsystem -a \
              -h /tmp/gpdb-hosts \
              --max_connections=100
 
-# Initialize singlecluster hadoop filesystem
-init-gphd.sh
-start-gphd.sh
-
 ## Allow any host access the Cloudberry Cluster
 echo 'host all all 0.0.0.0/0 trust' >> /data0/database/master/gpseg-1/pg_hba.conf
 gpstop -u
@@ -89,14 +85,75 @@ echo """
 
 # POST startup commands
 # TODO: can check the output of the commented commands to make sure things are running
-pushd ~/workspace/cloudberry-pxf && make && make test && make install && popd
+export GRADLE_OPTS="-Dfile.encoding=utf-8"
+#pushd ~/workspace/cloudberry-pxf && make clean && make && make test && make install && popd
+pushd ~/workspace/cloudberry-pxf && make install && popd
+
+# Initialize singlecluster hadoop filesystem (needs to be done after PXF is installed)
+cp $PXF_HOME/share/pxf-hbase-*.jar ~gpadmin/workspace/singlecluster/hbase/lib
+init-gphd.sh
+start-gphd.sh
+
 pxf cluster prepare
 # psql -P pager=off gpadmin -c 'CREATE EXTENSION pxf'
   #CREATE EXTENSION
 # psql -P pager=off gpadmin -c 'DROP EXTENSION pxf'
   #DROP EXTENSION
+
+# set up pxf configs from templates
 cp -v $PXF_HOME/templates/{hdfs,mapred,yarn,core,hbase,hive}-site.xml $PXF_BASE/servers/default
+
+# add file based stuff (breaks smoke tests because they put files in the wrong place)
+#echo "create mount point and mount it"
+#BASE_PATH=/mnt/nfs/var/nfsshare
+#sudo mkdir -p ${BASE_PATH}
+#sudo mount -t nfs cdw:/var/nfs ${BASE_PATH}
+#sudo chown gpadmin:gpadmin ${BASE_PATH}
+#sudo chmod 755 ${BASE_PATH}
+#cp $PXF_HOME/templates/pxf-site.xml $PXF_BASE/servers/default/
+#sed -i "s|</configuration>|<property><name>pxf.fs.basePath</name><value>${BASE_PATH}</value></property></configuration>|g" $PXF_BASE/servers/default/pxf-site.xml
+
+#echo "Minio credentials: accessKey=${MINIO_ACCESS_KEY} secretKey=${MINIO_SECRET_KEY}"
+#echo 'Starting Minio ...'
+#MINIO_DOMAIN=localhost sudo /opt/minio/bin/minio server /opt/minio/data &
+#
+#mkdir -p $PXF_BASE/servers/minio
+#sed -e "s|YOUR_AWS_ACCESS_KEY_ID|${ACCESS_KEY_ID}|" \
+#	-e "s|YOUR_AWS_SECRET_ACCESS_KEY|${SECRET_ACCESS_KEY}|" \
+#	-e "s|YOUR_MINIO_URL|http://localhost:9000|" \
+#	$PXF_HOME/templates/minio-site.xml >$PXF_BASE/servers/minio/minio-site.xml
+#
+#MINIO_CORE_SITE_XML=$(mktemp)
+#cat <<-EOF > "${MINIO_CORE_SITE_XML}"
+#	<property>
+#	  <name>fs.s3a.endpoint</name>
+#	  <value>http://localhost:9000</value>
+#	</property>
+#	<property>
+#	  <name>fs.s3a.access.key</name>
+#	  <value>${ACCESS_KEY_ID}</value>
+#	</property>
+#	<property>
+#	  <name>fs.s3a.secret.key</name>
+#	  <value>${SECRET_ACCESS_KEY}</value>
+#	</property>
+#EOF
+#sed -i -e "/<configuration>/r ${MINIO_CORE_SITE_XML}" ~gpadmin/workspace/singlecluster/hadoop/etc/hadoop/core-site.xml
+
+# mkdir -p $PXF_BASE/servers/s3
+# sed -e "s|YOUR_AWS_ACCESS_KEY_ID|DUMMY|" \
+# 	-e "s|YOUR_AWS_SECRET_ACCESS_KEY|dummy|" \
+# 	$PXF_HOME/templates/s3-site.xml >$PXF_BASE/servers/s3/s3-site.xml
+#
+# mkdir -p $PXF_BASE/servers/s3-invalid
+# cp $PXF_HOME/templates/s3-site.xml $PXF_BASE/servers/s3-invalid/s3-site.xml
+# chown -R gpadmin:gpadmin "$PXF_BASE/servers/s3" "$PXF_BASE/servers/s3-invalid"
+
+# register the cluster
 pxf cluster register
+
+echo -e "\npxf.profile.dynamic.regex=test:.*" >> $PXF_BASE/conf/pxf-application.properties
+
 pxf cluster start
 # pxf cluster status
    #Checking status of PXF servers on coordinator host and 0 segment hosts...
@@ -108,8 +165,7 @@ echo """
 ===========================
 """
 
-# make TEST=HdfsSmokeTest -C $HOME/workspace/cloudberry-pxf/automation
-make GROUP=gpdb -C $HOME/workspace/cloudberry-pxf/automation
+make GROUP=smoke -C $HOME/workspace/cloudberry-pxf/automation
 
 # Uncomment to leave the container running for inspection
 /bin/bash

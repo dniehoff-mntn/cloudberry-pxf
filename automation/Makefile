@@ -85,7 +85,7 @@ endif
 # disables credentials check by artifactregistry-maven-wagon plugin when run inside GCE VM.
 export NO_GCE_CHECK := true
 
-MVN=mvn
+MVN=mvn --batch-mode
 
 .PHONY: all test
 
